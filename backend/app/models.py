@@ -29,7 +29,7 @@ class Instance(SQLModel, table=True):
 
     # Raw data
     shodan: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
-    metadata: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+    service_metadata: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
     models: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
 
     # Derived convenience fields (best-effort)

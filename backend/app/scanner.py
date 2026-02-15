@@ -111,7 +111,7 @@ def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok:
 
     inst.shodan = shodan_match
     if meta is not None:
-        inst.metadata = meta
+        inst.service_metadata = meta
     if models is not None:
         inst.models = models
 

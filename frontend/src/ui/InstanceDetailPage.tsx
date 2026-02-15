@@ -45,7 +45,7 @@ export default function InstanceDetailPage() {
       <pre style={{ background: '#f7f7f7', padding: 12, overflow: 'auto' }}>{JSON.stringify(item.models, null, 2)}</pre>
 
       <h4>Metadata</h4>
-      <pre style={{ background: '#f7f7f7', padding: 12, overflow: 'auto' }}>{JSON.stringify(item.metadata, null, 2)}</pre>
+      <pre style={{ background: '#f7f7f7', padding: 12, overflow: 'auto' }}>{JSON.stringify(item.service_metadata, null, 2)}</pre>
     </div>
   )
 }

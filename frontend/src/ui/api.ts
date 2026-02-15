@@ -12,7 +12,7 @@ export type Instance = {
   title?: string | null
   version?: string | null
   gpu_name?: string | null
-  metadata?: any
+  service_metadata?: any
   models?: any
   last_error?: string | null
 }
