@@ -22,6 +22,12 @@ legacy/__pycache__/
 node_modules/
 frontend/node_modules/
 
+# bun
+bun.lock
+bun.lockb
+frontend/bun.lock
+frontend/bun.lockb
+
 # build
 build/
 dist/
