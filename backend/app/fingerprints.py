@@ -7,6 +7,24 @@ import httpx
 from .config import settings
 
 
+def _sanitize_gpu_name(name: str) -> str:
+    n = name.strip()
+
+    # Common ComfyUI format: "cuda:0 NVIDIA GeForce RTX 5090 : cudaMallocAsync"
+    if n.lower().startswith("cuda:"):
+        # drop "cuda:<idx> " prefix
+        parts = n.split(" ", 1)
+        if len(parts) == 2:
+            n = parts[1].strip()
+
+    # Drop allocator suffixes
+    for suffix in (": cudaMallocAsync", ": cudaMalloc", ": default"):
+        if n.endswith(suffix):
+            n = n[: -len(suffix)].strip()
+
+    return n
+
+
 def _pick_comfy_gpu_name(system_stats: dict[str, Any] | None) -> str | None:
     if not system_stats:
         return None
@@ -19,17 +37,17 @@ def _pick_comfy_gpu_name(system_stats: dict[str, Any] | None) -> str | None:
             if isinstance(first, dict):
                 for nk in ("name", "device_name", "model", "product_name"):
                     if isinstance(first.get(nk), str):
-                        return first[nk]
+                        return _sanitize_gpu_name(first[nk])
             if isinstance(first, str):
-                return first
+                return _sanitize_gpu_name(first)
         if isinstance(val, dict):
             for nk in ("name", "device_name", "model", "product_name"):
                 if isinstance(val.get(nk), str):
-                    return val[nk]
+                    return _sanitize_gpu_name(val[nk])
 
     # Some builds might just include a string somewhere.
     if isinstance(system_stats.get("gpu_name"), str):
-        return system_stats["gpu_name"]
+        return _sanitize_gpu_name(system_stats["gpu_name"])
 
     return None
 
@@ -46,11 +64,15 @@ async def verify_comfyui(base_url: str, client: httpx.AsyncClient) -> tuple[bool
         r = await client.get(f"{base_url}/system_stats")
         if r.status_code == 200:
             metadata = r.json()
-            # Try to infer version
+            # Try to infer version (newer ComfyUI nests it under system)
             if isinstance(metadata.get("comfyui_version"), str):
                 version = metadata.get("comfyui_version")
             elif isinstance(metadata.get("version"), str):
                 version = metadata.get("version")
+            else:
+                system = metadata.get("system")
+                if isinstance(system, dict) and isinstance(system.get("comfyui_version"), str):
+                    version = system.get("comfyui_version")
     except Exception:
         pass
 
