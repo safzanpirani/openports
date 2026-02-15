@@ -20,8 +20,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"] ,
-    allow_headers=["*"] ,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -58,6 +58,21 @@ def list_runs(session: Session = Depends(get_session), limit: int = 50):
     return session.exec(stmt).all()
 
 
+def _run_shodan_scan_job(limit: int | None) -> None:
+    """Run a Shodan scan in a background worker thread.
+
+    Starlette BackgroundTasks run in a threadpool where there is no running event loop,
+    so we use asyncio.run() here.
+    """
+
+    from sqlmodel import Session as _Session
+
+    from .db import engine
+
+    with _Session(engine) as s:
+        asyncio.run(run_shodan_scan(s, limit=limit))
+
+
 @app.post("/api/scan/shodan", dependencies=[Depends(require_admin)])
 async def trigger_shodan_scan(
     background: BackgroundTasks,
@@ -66,15 +81,7 @@ async def trigger_shodan_scan(
 ):
     # Run in background so the HTTP request returns quickly.
     # Note: for heavier workloads, split scanner into a separate worker process.
-    async def _runner():
-        # new session for background task
-        from sqlmodel import Session as _Session
-        from .db import engine
-
-        with _Session(engine) as s:
-            await run_shodan_scan(s, limit=limit)
-
-    background.add_task(asyncio.create_task, _runner())
+    background.add_task(_run_shodan_scan_job, limit)
     return {"status": "scheduled"}
 
 
