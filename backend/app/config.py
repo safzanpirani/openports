@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +17,17 @@ class Settings(BaseSettings):
 
     # Storage
     DATABASE_URL: str = "sqlite:///./data/openports.db"
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def _coerce_empty_db_url(cls, v):
+        # If the user keeps DATABASE_URL empty in .env, pydantic will treat it as "" and override the default.
+        # Coerce empty/whitespace back to our default sqlite url.
+        if v is None:
+            return "sqlite:///./data/openports.db"
+        if isinstance(v, str) and not v.strip():
+            return "sqlite:///./data/openports.db"
+        return v
 
     # Scanning
     SHODAN_LIMIT: int = 200
