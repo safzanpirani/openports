@@ -10,12 +10,16 @@ FastAPI backend that:
 ## Setup
 
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
 cp ../.env.example .env
 # edit .env with your keys
+
+# optional helper: print your TELEGRAM_CHAT_ID candidates
+export TELEGRAM_BOT_TOKEN='...'
+python3 tools/get_telegram_chat_id.py
 
 uvicorn app.main:app --reload --port 8000
 ```
