@@ -8,12 +8,21 @@ __pycache__/
 .venv/
 venv/
 .env
+
+# databases
 *.sqlite
 *.sqlite3
 *.db
+
+# legacy secrets/caches
 legacy/.env
 legacy/__pycache__/
+
+# node
+node_modules/
+frontend/node_modules/
 
 # build
 build/
 dist/
+frontend/dist/
