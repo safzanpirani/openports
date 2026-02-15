@@ -1,0 +1,7 @@
+aiohttp
+python-telegram-bot
+typer
+rich
+nest_asyncio
+shodan
+python-dotenv
