@@ -25,9 +25,83 @@ app.add_middleware(
 )
 
 
+from .telegram import poll_telegram_updates, send_telegram_message
+
+async def _telegram_handler(text: str) -> None:
+    from sqlmodel import Session as _Session
+    from .db import engine
+    from sqlmodel import select
+
+    cmd = text.split()[0].lower()
+    if cmd == "/scan":
+        await send_telegram_message("Starting Shodan scan...")
+        # Schedule in background
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, _run_shodan_scan_job, None)
+        await send_telegram_message("Scan job scheduled.")
+    elif cmd == "/status":
+        with _Session(engine) as s:
+            alive_count = len(s.exec(select(Instance).where(Instance.is_alive == True)).all())
+            total = len(s.exec(select(Instance)).all())
+        await send_telegram_message(f"Status:\nTotal instances: {total}\nAlive instances: {alive_count}")
+    elif cmd == "/scrape":
+        parts = text.split()
+        force_rescan = "force" in text.lower()
+        target_gpu = None
+        target_model = None
+        
+        for i, p in enumerate(parts):
+            if p.lower() == "gpu" and i + 1 < len(parts):
+                target_gpu = parts[i+1]
+            elif p.lower() == "model" and i + 1 < len(parts):
+                target_model = parts[i+1]
+
+        msg_action = "Starting Shodan web bot scraper"
+        if target_gpu or target_model:
+            msg_action += f" (Infinite mode: chasing down"
+            if target_gpu: msg_action += f" GPU='{target_gpu}'"
+            if target_model: msg_action += f" Model='{target_model}'"
+            msg_action += ")..."
+        else:
+            msg_action += " (Page 1-2)..."
+
+        if force_rescan:
+            msg_action += " [FORCE RESCAN ENABLED]"
+            
+        await send_telegram_message(msg_action)
+        import subprocess
+        import os
+        import sys
+        
+        # Run the scraper as a subprocess so it doesn't block the async event loop
+        # and has its own clean module setup
+        script_path = os.path.join(os.path.dirname(__file__), "..", "tools", "shodan_scraper.py")
+        loop = asyncio.get_running_loop()
+        
+        def _run_scraper():
+            args = [sys.executable, script_path]
+            if force_rescan:
+                args.append("--force")
+            if target_gpu:
+                args.extend(["--target-gpu", target_gpu])
+            if target_model:
+                args.extend(["--target-model", target_model])
+            subprocess.run(args, check=False)
+            
+        loop.run_in_executor(None, _run_scraper)
+        await send_telegram_message("Scraper job scheduled (Check bot logs/chat for output).")
+    elif cmd == "/ping":
+        await send_telegram_message("pong")
+
+
+async def _start_telegram_poller() -> None:
+    await poll_telegram_updates(_telegram_handler)
+
+
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
+    asyncio.create_task(_start_telegram_poller())
 
 
 @app.get("/api/instances")

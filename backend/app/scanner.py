@@ -72,6 +72,7 @@ async def _verify_one(
     str | None,
     str | None,
     dict[str, Any] | None,
+    dict[str, Any],
 ]:
     base_url = f"http://{ip}:{port}"
     shodan_compact = _compact_shodan_match(shodan_match)
@@ -80,17 +81,17 @@ async def _verify_one(
         timeout = httpx.Timeout(settings.HTTP_TIMEOUT_SECONDS)
         async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
             if port == 8188:
-                ok, meta, models, version, gpu_name = await verify_comfyui(base_url, client)
-                return Service.comfyui, ip, port, ok, meta, models, version, gpu_name, shodan_compact
+                ok, meta, models, version, gpu_name, metrics = await verify_comfyui(base_url, client)
+                return Service.comfyui, ip, port, ok, meta, models, version, gpu_name, shodan_compact, metrics
             if port == 11434:
-                ok, meta, models, version = await verify_ollama(base_url, client)
-                return Service.ollama, ip, port, ok, meta, models, version, None, shodan_compact
+                ok, meta, models, version, metrics = await verify_ollama(base_url, client)
+                return Service.ollama, ip, port, ok, meta, models, version, None, shodan_compact, metrics
 
     # unreachable
     raise RuntimeError("unsupported port")
 
 
-def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok: bool, meta, models, version, gpu_name, shodan_match) -> tuple[Instance, bool]:
+def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok: bool, meta, models, version, gpu_name, shodan_match, metrics: dict[str, Any]) -> tuple[Instance, bool]:
     stmt = select(Instance).where(Instance.service == service, Instance.ip == ip, Instance.port == port)
     inst = session.exec(stmt).first()
 
@@ -119,6 +120,10 @@ def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok:
         inst.version = version
     if gpu_name:
         inst.gpu_name = gpu_name
+        
+    for f in ("vram_total_gb", "vram_free_gb", "ram_total_gb", "ram_free_gb", "model_count", "max_model_params", "max_context", "node_count"):
+        if f in metrics:
+            setattr(inst, f, metrics[f])
 
     session.add(inst)
     session.commit()
@@ -161,10 +166,10 @@ async def run_shodan_scan(session: Session, limit: int | None = None) -> ScanRun
         for r in results:
             if isinstance(r, Exception):
                 continue
-            service, ip, port, ok, meta, models, version, gpu_name, shodan_compact = r
+            service, ip, port, ok, meta, models, version, gpu_name, shodan_compact, metrics = r
             if ok:
                 verified += 1
-            inst, created = _upsert_instance(session, service, ip, port, ok, meta, models, version, gpu_name, shodan_match=shodan_compact)
+            inst, created = _upsert_instance(session, service, ip, port, ok, meta, models, version, gpu_name, shodan_match=shodan_compact, metrics=metrics)
 
             if created and ok:
                 new_instances += 1

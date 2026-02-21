@@ -36,9 +36,16 @@ class Instance(SQLModel, table=True):
     title: str | None = Field(default=None)
     version: str | None = Field(default=None)
     gpu_name: str | None = Field(default=None)
+    vram_total_gb: float | None = Field(default=None)
+    vram_free_gb: float | None = Field(default=None)
+    ram_total_gb: float | None = Field(default=None)
+    ram_free_gb: float | None = Field(default=None)
+    model_count: int | None = Field(default=None)
+    max_model_params: float | None = Field(default=None)
+    max_context: int | None = Field(default=None)
+    node_count: int | None = Field(default=None)
 
     last_error: str | None = Field(default=None)
-
 
 class ScanRun(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

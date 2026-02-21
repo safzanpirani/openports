@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     SHODAN_API_KEY: str | None = None
     TELEGRAM_BOT_TOKEN: str | None = None
     TELEGRAM_CHAT_ID: str | None = None
+    SHODAN_COOKIE: str | None = None
 
     # Optional protection for "dangerous" endpoints like triggering scans
     ADMIN_TOKEN: str | None = None

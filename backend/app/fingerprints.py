@@ -52,8 +52,8 @@ def _pick_comfy_gpu_name(system_stats: dict[str, Any] | None) -> str | None:
     return None
 
 
-async def verify_comfyui(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, str | None]:
-    """Returns (ok, metadata, models, version, gpu_name)."""
+async def verify_comfyui(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, str | None, dict[str, Any]]:
+    """Returns (ok, metadata, models, version, gpu_name, metrics)."""
 
     metadata: dict[str, Any] | None = None
     models: dict[str, Any] | None = None
@@ -107,12 +107,55 @@ async def verify_comfyui(base_url: str, client: httpx.AsyncClient) -> tuple[bool
             pass
 
     gpu_name = _pick_comfy_gpu_name(metadata)
-    return ok, metadata, models, version, gpu_name
+
+    # Calculate metrics
+    vram_total_gb = None
+    vram_free_gb = None
+    ram_total_gb = None
+    ram_free_gb = None
+    if isinstance(metadata, dict):
+        system_obj = metadata.get("system", {})
+        if isinstance(system_obj, dict):
+            vt = system_obj.get("vram_total")
+            vf = system_obj.get("vram_free")
+            rt = system_obj.get("ram_total")
+            rf = system_obj.get("ram_free")
+            if isinstance(vt, (int, float)): vram_total_gb = vt / (1024**3)
+            if isinstance(vf, (int, float)): vram_free_gb = vf / (1024**3)
+            if isinstance(rt, (int, float)): ram_total_gb = rt / (1024**3)
+            if isinstance(rf, (int, float)): ram_free_gb = rf / (1024**3)
+
+    model_count = 0
+    if isinstance(models, dict):
+        for k, v in models.items():
+            if k != "types" and isinstance(v, list):
+                model_count += len(v)
+
+    node_count = None
+    try:
+        r2 = await client.get(f"{base_url}/object_info")
+        if r2.status_code == 200:
+            node_count = len(r2.json())
+    except Exception:
+        pass
+
+    metrics = {
+        "vram_total_gb": vram_total_gb,
+        "vram_free_gb": vram_free_gb,
+        "ram_total_gb": ram_total_gb,
+        "ram_free_gb": ram_free_gb,
+        "model_count": model_count if model_count > 0 else None,
+        "node_count": node_count,
+        "max_model_params": None,
+        "max_context": None
+    }
+
+    return ok, metadata, models, version, gpu_name, metrics
 
 
-async def verify_ollama(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None]:
-    """Returns (ok, metadata, models, version).
-
+async def verify_ollama(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
+    """Returns (ok, metadata, models, version, metrics).
+    
     Note: Ollama does NOT reliably expose GPU model info via its HTTP API.
     """
 
@@ -160,4 +203,49 @@ async def verify_ollama(base_url: str, client: httpx.AsyncClient) -> tuple[bool,
         models = models_out
 
     ok = metadata is not None or models is not None
-    return ok, metadata, models, version
+
+    model_count = None
+    max_params = None
+    max_context = None
+
+    if isinstance(models, dict):
+        tags = models.get("tags")
+        if isinstance(tags, dict) and isinstance(tags.get("models"), list):
+            model_count = len(tags["models"])
+            
+        show_list = models.get("show")
+        if isinstance(show_list, list):
+            for s in show_list:
+                show_data = s.get("show", {})
+                
+                mi = show_data.get("model_info", {})
+                if isinstance(mi, dict):
+                    for k, v in mi.items():
+                        if "context_length" in k and isinstance(v, (int, float)):
+                            if max_context is None or v > max_context:
+                                max_context = int(v)
+                
+                details = show_data.get("details", {})
+                if isinstance(details, dict):
+                    psize_str = details.get("parameter_size", "")
+                    if isinstance(psize_str, str) and psize_str.upper().endswith("B"):
+                        try:
+                            val = float(psize_str[:-1])
+                            if max_params is None or val > max_params:
+                                max_params = val
+                        except:
+                            pass
+
+    metrics = {
+        "vram_total_gb": None,
+        "vram_free_gb": None,
+        "ram_total_gb": None,
+        "ram_free_gb": None,
+        "model_count": model_count,
+        "node_count": None,
+        "max_model_params": max_params,
+        "max_context": max_context
+    }
+
+    return ok, metadata, models, version, metrics
+

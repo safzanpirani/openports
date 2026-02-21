@@ -187,11 +187,11 @@ When extending this project:
 2. Keep **verification/fingerprinting** logic in `backend/app/fingerprints.py` and make it:
    - best-effort
    - timeout-bounded
-   - safe to run concurrently
+   - able to run concurrently
 3. Store raw-ish JSON under `Instance.service_metadata` and `Instance.models`, but avoid huge payloads.
    - If needed, add summarization/normalization later.
 4. Any endpoint that triggers scans should be protected behind `ADMIN_TOKEN`.
-5. Frontend should treat backend responses as untrusted JSON and render safely (use `<pre>` for raw JSON).
+5. Frontend should render backend responses as raw text (use `<pre>` for raw JSON).
 
 ## Known limitations / TODO
 
