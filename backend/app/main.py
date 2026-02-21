@@ -46,7 +46,9 @@ async def _telegram_handler(text: str) -> None:
         await send_telegram_message(f"Status:\nTotal instances: {total}\nAlive instances: {alive_count}")
     elif cmd == "/scrape":
         parts = text.split()
-        force_rescan = "force" in text.lower()
+        # Check for exact word "force" (not substring match, to avoid e.g. "reinforce")
+        lower_parts = [p.lower() for p in parts]
+        force_rescan = "force" in lower_parts
         target_gpu = None
         target_model = None
         

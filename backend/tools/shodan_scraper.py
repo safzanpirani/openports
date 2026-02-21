@@ -3,8 +3,11 @@ import re
 import httpx
 import sys
 import os
+import warnings
 from sqlmodel import Session, select
 from datetime import datetime, timedelta, timezone
+
+MAX_PAGES = 50  # Safety cap for infinite target mode
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -76,7 +79,7 @@ async def process_ips(ips: set[str], port: int, service: Service, force_rescan: 
         print(f"[*] Found {len(ips)} IPs, but {len(recent_ips)} were already checked recently. Scanning {len(new_ips)} fresh IPs...")
         
         if not new_ips:
-            return
+            return False
 
         limits = httpx.Limits(max_connections=20)
         timeout = httpx.Timeout(5.0)
@@ -92,20 +95,21 @@ async def process_ips(ips: set[str], port: int, service: Service, force_rescan: 
                 inst = s.exec(stmt_inst).first()
                 if not inst:
                     inst = Instance(ip=ip, port=port, service=service)
-                inst.last_checked_at = datetime.utcnow()
+                inst.last_checked_at = datetime.now(timezone.utc).replace(tzinfo=None)
                 
                 if isinstance(res, Exception) or not res:
                     inst.is_alive = False
                     inst.last_error = str(res) if isinstance(res, Exception) else "Verification failed"
                 else:
                     inst.is_alive = True
-                    inst.last_seen_at = datetime.utcnow()
+                    inst.last_seen_at = datetime.now(timezone.utc).replace(tzinfo=None)
                     inst.version = res["version"]
                     inst.gpu_name = res["gpu_name"]
                     metrics = res["metrics"]
                     for f in ("model_count", "vram_total_gb", "vram_free_gb", "ram_total_gb", "ram_free_gb", "max_model_params", "max_context", "node_count"):
-                        if f in metrics:
-                            setattr(inst, f, metrics[f])
+                        val = metrics.get(f)
+                        if val is not None:
+                            setattr(inst, f, val)
                     results.append(res)
                 
                 s.add(inst)
@@ -208,11 +212,15 @@ async def main():
                 # If we are NOT in infinite target tracking mode, we just stop after page 2
                 if not target_gpu and not target_model and page >= 2:
                     break
+                
+                if page >= MAX_PAGES:
+                    print(f"[!] Reached max page cap ({MAX_PAGES}), stopping.")
+                    await send_telegram_message(f"⚠️ Reached max page cap ({MAX_PAGES}) without finding target. Stopping.")
+                    break
                     
                 page += 1
                 await asyncio.sleep(2) # be nice to Shodan HTML
 
-import warnings
 if __name__ == "__main__":
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)

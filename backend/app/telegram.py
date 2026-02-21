@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import httpx
 from typing import Callable, Awaitable
 
 from .config import settings
+
+logger = logging.getLogger(__name__)
 
 
 async def send_telegram_message(text: str) -> None:
@@ -52,7 +55,7 @@ async def poll_telegram_updates(on_command: Callable[[str], Awaitable[None]]) ->
                             
                             if str(chat_id) == str(settings.TELEGRAM_CHAT_ID) and text.startswith("/"):
                                 await on_command(text.strip())
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Telegram poll error: %s", exc)
             
             await asyncio.sleep(1)

@@ -122,8 +122,9 @@ def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok:
         inst.gpu_name = gpu_name
         
     for f in ("vram_total_gb", "vram_free_gb", "ram_total_gb", "ram_free_gb", "model_count", "max_model_params", "max_context", "node_count"):
-        if f in metrics:
-            setattr(inst, f, metrics[f])
+        val = metrics.get(f)
+        if val is not None:
+            setattr(inst, f, val)
 
     session.add(inst)
     session.commit()
