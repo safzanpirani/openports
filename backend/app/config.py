@@ -5,10 +5,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore"
+    )
 
     # API keys
     SHODAN_API_KEY: str | None = None
+    CENSYS_API_ID: str | None = None
+    CENSYS_API_SECRET: str | None = None
+    CENSYS_API_KEY: str | None = None
+    ZOOMEYE_API_KEY: str | None = None
+    CENSYS_COOKIE: str | None = None
+    ZOOMEYE_COOKIE: str | None = None
     TELEGRAM_BOT_TOKEN: str | None = None
     TELEGRAM_CHAT_ID: str | None = None
     SHODAN_COOKIE: str | None = None
