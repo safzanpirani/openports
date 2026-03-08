@@ -1,201 +1,232 @@
 # AGENTS.md
 
-This document explains the project architecture and operational workflow for coding agents (and humans) working in this repository.
+this file is the handoff doc for any agent setting up openports on a server.
 
-## What this project is
+## what this repo is
 
-**openports** is a small system to **track ComfyUI and Ollama instances** and surface useful metadata in a dashboard.
+openports tracks publicly exposed comfyui (`8188`) and ollama (`11434`) instances.
 
-- **ComfyUI** default port: `8188`
-- **Ollama** default port: `11434`
+it has:
+- `backend/` — fastapi api + scanning/fingerprinting + sqlite
+- `frontend/` — vite/react dashboard
+- `docker-compose.yml` — easiest deployment path
+- `deploy/nginx.conf` — frontend container nginx config
 
-It is designed as:
-- a **backend** that discovers/imports candidate hosts, verifies them via their HTTP APIs, and stores results
-- a **frontend** (React) dashboard to view instances, models, and scan history
-- optional **Telegram notifications** for newly discovered live instances
+## preferred way to move it to a server
 
-## Important operational note
+use git, not zip.
 
-Discovery of targets can come from:
-- a third-party index (e.g. Shodan/Censys) **if you have API access**, or
-- a manual import of IPs/hosts you are authorized to probe
+this repo already exists on github, so the clean path is:
+1. push code changes from the dev machine
+2. clone or pull on the server
+3. run `docker compose up -d --build`
 
-The backend always performs **verification/fingerprinting** itself before storing/alerting.
+only use a zip if git access is impossible.
 
-## Repo layout
+## deployment goal
 
-- `backend/`
-  - FastAPI application (`backend/app/*`)
-  - SQLite storage (by default) stored under `./data/`
-  - fingerprinting logic for ComfyUI and Ollama
-  - endpoints used by the dashboard
-  - helper tools under `backend/tools/` (for debugging and enrichment)
+after setup:
+- frontend should be reachable on `http://SERVER_IP:8080`
+- backend api should be reachable on `http://SERVER_IP:8000`
+- frontend should proxy `/api/*` to backend automatically
+- sqlite data should persist across restarts
 
-- `frontend/`
-  - Vite + React dashboard
-  - calls backend endpoints under `/api/*`
+## important gotchas
 
-- `legacy/`
-  - older prototype scripts kept for reference
+1. docker deployment uses repo-root `./data/openports.db`
+   - this is important
+   - local dev may have used `backend/data/openports.db`
+   - if you want to preserve old scan history, copy the old db into `./data/openports.db` on the server before first boot
 
-- `deploy/`
-  - nginx reverse proxy config for docker deployment
+2. for docker deployment, use repo-root `.env`
+   - do not rely on `backend/.env`
+   - compose reads `./.env`
 
-## Current architecture (high level)
+3. do not commit secrets or db files
+   - `.env`
+   - `backend/.env`
+   - `*.db`
 
-### 1) Discovery
+4. this project is meant to use third-party indexes / authorized sources for discovery, then verify targets itself
+   - do not add raw internet-wide scanning from the server unless explicitly asked and authorized
 
-The current codebase includes Shodan discovery scaffolding:
-- `backend/app/shodan_client.py`
-- `backend/app/scanner.py: run_shodan_scan()`
+## exact server setup steps
 
-If Shodan Search API is not available (403), use manual import tooling or add another provider.
+### option a: fresh server setup (recommended)
 
-### 2) Verification / Fingerprinting
-
-Verification is **HTTP-based** and best-effort. Core functions:
-- `backend/app/fingerprints.py`
-  - `verify_comfyui(base_url, client)`
-    - `GET /system_stats` (GPU/system info; version may be nested under `system.comfyui_version`)
-    - `GET /models` and `GET /models/<type>` (models by folder)
-    - fallback `GET /` contains “comfy”
-  - `verify_ollama(base_url, client)`
-    - `GET /api/version`
-    - `GET /api/tags`
-    - `POST /api/show` for each model (limited by `OLLAMA_SHOW_LIMIT`)
-
-Notes:
-- ComfyUI often exposes GPU info via `/system_stats`.
-- Ollama generally does **not** expose GPU hardware info via the public HTTP API.
-
-### 3) Storage
-
-- SQLModel models live in `backend/app/models.py`
-  - `Instance` stores:
-    - `service` (`comfyui|ollama`), `ip`, `port`
-    - timestamps + `is_alive`
-    - `service_metadata` (raw-ish JSON)
-    - `models` (raw-ish JSON)
-    - `shodan` (compact subset)
-    - derived convenience fields: `version`, `gpu_name`
-  - `ScanRun` stores a history row per scan attempt
-
-DB configuration:
-- `DATABASE_URL` in `.env`
-- default: `sqlite:///./data/openports.db`
-
-### 4) API
-
-Backend entrypoint:
-- `backend/app/main.py`
-
-Endpoints (current):
-- `GET /api/instances` list instances
-- `GET /api/instances/{id}` instance detail
-- `GET /api/scan/runs` scan history
-- `POST /api/scan/shodan` trigger scan (optional auth)
-
-Auth:
-- If `ADMIN_TOKEN` is set, `POST /api/scan/shodan` requires header:
-  - `Authorization: Bearer <ADMIN_TOKEN>`
-
-Implementation detail:
-- The scan trigger uses `BackgroundTasks` and runs `asyncio.run(...)` in a worker thread.
-
-### 5) Notifications
-
-- `backend/app/telegram.py` sends messages via the Telegram Bot API
-- On scan, newly created + verified instances are announced.
-
-Env vars:
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
-
-Helper to discover chat id:
-- `backend/tools/get_telegram_chat_id.py`
-
-### 6) Frontend dashboard
-
-- `frontend/src/ui/*`
-- Uses `/api/*` via Vite dev proxy (`frontend/vite.config.ts`)
-
-Pages:
-- Instances list
-- Instance detail (raw JSON for models + metadata)
-- Scan runs + trigger scan
-
-## Running the project (dev)
-
-### Backend (uv)
+run these commands on the server:
 
 ```bash
-cd backend
-uv venv
-source .venv/bin/activate
-uv pip install -r requirements.txt
+mkdir -p /opt
+cd /opt
 
-cp ../.env.example .env
-# Fill in keys. If you don’t want to set DATABASE_URL, remove it or leave it unset.
+# clone the repo
+# replace with ssh remote if that is what the server uses
+git clone https://github.com/safzanpirani/openports.git
+cd openports
 
-uv run uvicorn app.main:app --reload --port 8000
-```
-
-### Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Open: http://localhost:5173
-
-## Docker deployment (basic)
-
-```bash
+# create runtime env file
 cp .env.example .env
-# fill env
-
-docker compose up --build
 ```
 
-Frontend: http://localhost:8080
-Backend: http://localhost:8000
+then edit `.env` and fill the values you actually want.
 
-## Debugging / enrichment tools
+minimum useful env:
+- `SHODAN_API_KEY=` if scans will use shodan
 
-Tools are intentionally separated from the FastAPI app so agents can test fingerprint extraction without clicking around.
+optional env:
+- `TELEGRAM_BOT_TOKEN=`
+- `TELEGRAM_CHAT_ID=`
+- `ADMIN_TOKEN=` to protect scan-trigger endpoints
+- `CENSYS_*`, `ZOOMEYE_*`, cookies, etc if those providers are needed
 
-- Verify a single service:
-  - `uv run python -m tools.verify_target comfyui http://HOST:8188`
-  - `uv run python -m tools.verify_target ollama  http://HOST:11434`
+then start it:
 
-- Scan a set of IPs quickly:
-  - `uv run python -m tools.scan_ips 1.2.3.4 5.6.7.8`
+```bash
+mkdir -p data
+docker compose up -d --build
+```
 
-- Enrich targets and print a JSON summary:
-  - `uv run python -m tools.enrich 1.2.3.4 5.6.7.8`
+verify it:
 
-- Shodan sanity check:
-  - `uv run python tools/test_shodan.py`
+```bash
+curl http://127.0.0.1:8000/api/instances
+curl -I http://127.0.0.1:8080
+```
 
-## Guidance for coding agents
+expected result:
+- backend returns json or `[]`
+- frontend returns `200 OK`
 
-When extending this project:
+### option b: preserve existing sqlite history from the dev machine
 
-1. **Prefer adding new discovery sources** as separate modules (`*_client.py`) that yield candidate `(ip, port)` pairs.
-2. Keep **verification/fingerprinting** logic in `backend/app/fingerprints.py` and make it:
-   - best-effort
-   - timeout-bounded
-   - able to run concurrently
-3. Store raw-ish JSON under `Instance.service_metadata` and `Instance.models`, but avoid huge payloads.
-   - If needed, add summarization/normalization later.
-4. Any endpoint that triggers scans should be protected behind `ADMIN_TOKEN`.
-5. Frontend should render backend responses as raw text (use `<pre>` for raw JSON).
+if the old machine has data at:
+- `backend/data/openports.db`
 
-## Known limitations / TODO
+then on the source machine, copy it to the server as:
+- `/opt/openports/data/openports.db`
 
-- Shodan Search API may be unavailable depending on plan; add Censys/Zoomeye/FOFA or implement manual import.
-- No scheduled scanning yet (only manual trigger).
-- Dashboard currently renders raw JSON; add nicer summary views (model counts, GPU, VRAM, etc.).
-- Ollama GPU detection is not available via HTTP API; only host-side metrics would show it.
+example shape:
+
+```bash
+# run from the source/dev machine
+scp backend/data/openports.db USER@SERVER_IP:/opt/openports/data/openports.db
+```
+
+after the db is in place, start or restart:
+
+```bash
+cd /opt/openports
+docker compose up -d --build
+```
+
+## day-2 operations
+
+### update the app
+
+```bash
+cd /opt/openports
+git pull --ff-only
+docker compose up -d --build
+```
+
+### view logs
+
+```bash
+cd /opt/openports
+docker compose logs -f backend
+docker compose logs -f frontend
+```
+
+### restart services
+
+```bash
+cd /opt/openports
+docker compose restart
+```
+
+### stop services
+
+```bash
+cd /opt/openports
+docker compose down
+```
+
+## how the app is wired
+
+- backend container:
+  - serves fastapi on port `8000`
+- frontend container:
+  - serves built static assets on port `80` inside container
+  - exposed as host port `8080`
+  - proxies `/api/*` to backend using `deploy/nginx.conf`
+- persistent sqlite storage:
+  - host path: `./data`
+  - container path: `/app/data`
+
+## quick health checklist
+
+after deployment, confirm all of these:
+
+- `docker compose ps` shows both `backend` and `frontend` running
+- `curl http://127.0.0.1:8000/api/instances` works
+- opening `http://SERVER_IP:8080` loads the dashboard
+- opening browser devtools on the dashboard shows `/api/*` requests succeeding
+- `data/openports.db` exists on disk if persistence is expected
+
+## if something breaks
+
+### frontend loads but api calls fail
+check:
+- backend container is up
+- port `8000` is listening
+- frontend nginx proxy config is present at `deploy/nginx.conf`
+- browser requests are going to `/api/...`, not `localhost`
+
+### backend starts but data is missing
+check:
+- whether you expected old data from `backend/data/openports.db`
+- whether that file was copied to `data/openports.db` on the server
+- whether docker created a fresh empty db because `data/` was empty
+
+### compose build fails
+check:
+- docker and docker compose plugin are installed
+- server has outbound internet for pip/npm package installs
+- repo was cloned completely
+
+## fallback path if docker is not available
+
+only use this if docker is unavailable.
+
+backend:
+
+```bash
+cd /opt/openports/backend
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp ../.env.example .env
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+frontend:
+
+```bash
+cd /opt/openports/frontend
+npm install
+npm run build
+```
+
+then serve `frontend/dist/` with nginx and proxy `/api/` to `http://127.0.0.1:8000`.
+
+docker is still the preferred path.
+
+## agent policy for this repo
+
+if you are an agent operating on this repo:
+- prefer small, explicit changes
+- do not commit secrets
+- do not commit `.env` or db files
+- if changing deployment behavior, update this file too
+- if you need to preserve existing scan history, ask whether the old sqlite db should be copied before first boot
