@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import secrets
+
 from fastapi import Header, HTTPException
 
 from .config import settings
@@ -18,5 +20,5 @@ def require_admin(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="Missing Authorization header")
 
     token = authorization.removeprefix("Bearer ").strip()
-    if token != settings.ADMIN_TOKEN:
+    if not secrets.compare_digest(token, settings.ADMIN_TOKEN):
         raise HTTPException(status_code=403, detail="Invalid token")

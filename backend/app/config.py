@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     # Optional protection for "dangerous" endpoints like triggering scans
     ADMIN_TOKEN: str | None = None
 
+    # HTTP
+    # Comma-separated list, e.g. "http://localhost:5173,https://openports.example.com".
+    # "*" is convenient for local/dev deployments, but do not combine it with credentials.
+    CORS_ORIGINS: str = "*"
+
     # Storage
     DATABASE_URL: str = "sqlite:///./data/openports.db"
 
@@ -37,6 +42,10 @@ class Settings(BaseSettings):
         if isinstance(v, str) and not v.strip():
             return "sqlite:///./data/openports.db"
         return v
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
     # Scanning
     SHODAN_LIMIT: int = 200

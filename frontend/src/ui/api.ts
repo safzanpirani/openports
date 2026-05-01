@@ -12,6 +12,14 @@ export type Instance = {
   title?: string | null
   version?: string | null
   gpu_name?: string | null
+  vram_total_gb?: number | null
+  vram_free_gb?: number | null
+  ram_total_gb?: number | null
+  ram_free_gb?: number | null
+  model_count?: number | null
+  max_model_params?: number | null
+  max_context?: number | null
+  node_count?: number | null
   service_metadata?: any
   models?: any
   last_error?: string | null

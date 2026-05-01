@@ -37,6 +37,24 @@ export default function InstanceDetailPage() {
         <div>GPU</div>
         <div>{item.gpu_name ?? '— (Ollama typically does not expose GPU via HTTP API)'}</div>
 
+        <div>Models</div>
+        <div>{item.model_count ?? '—'}</div>
+
+        <div>Max model params</div>
+        <div>{item.max_model_params ? `${item.max_model_params}B` : '—'}</div>
+
+        <div>Max context</div>
+        <div>{item.max_context ?? '—'}</div>
+
+        <div>VRAM</div>
+        <div>{item.vram_total_gb ? `${item.vram_free_gb?.toFixed(1) ?? '?'} / ${item.vram_total_gb.toFixed(1)} GB free` : '—'}</div>
+
+        <div>RAM</div>
+        <div>{item.ram_total_gb ? `${item.ram_free_gb?.toFixed(1) ?? '?'} / ${item.ram_total_gb.toFixed(1)} GB free` : '—'}</div>
+
+        <div>Node count</div>
+        <div>{item.node_count ?? '—'}</div>
+
         <div>Last error</div>
         <div>{item.last_error ?? '—'}</div>
       </div>

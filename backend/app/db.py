@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import os
+from pathlib import Path
+
 from sqlmodel import SQLModel, create_engine, Session
 
 from .config import settings
@@ -12,13 +13,30 @@ def _sqlite_connect_args(url: str):
     return {}
 
 
+def _sqlite_file_path(url: str) -> Path | None:
+    if url == "sqlite:///:memory:" or not url.startswith("sqlite:"):
+        return None
+    if url.startswith("sqlite:////"):
+        return Path(url.removeprefix("sqlite:///"))
+    if url.startswith("sqlite:///"):
+        return Path(url.removeprefix("sqlite:///"))
+    if url.startswith("sqlite://"):
+        return Path(url.removeprefix("sqlite://"))
+    return None
+
+
 def ensure_data_dir() -> None:
-    # for sqlite files like ./data/openports.db
-    if settings.DATABASE_URL.startswith("sqlite:"):
-        os.makedirs("data", exist_ok=True)
+    db_path = _sqlite_file_path(settings.DATABASE_URL)
+    if db_path is None:
+        return
+    db_path.parent.mkdir(parents=True, exist_ok=True)
 
 
-engine = create_engine(settings.DATABASE_URL, echo=False, connect_args=_sqlite_connect_args(settings.DATABASE_URL))
+engine = create_engine(
+    settings.DATABASE_URL,
+    echo=False,
+    connect_args=_sqlite_connect_args(settings.DATABASE_URL),
+)
 
 
 def init_db() -> None:

@@ -35,6 +35,8 @@ export default function InstancesPage() {
               <th>Alive</th>
               <th>Version</th>
               <th>GPU (ComfyUI only)</th>
+              <th>Models</th>
+              <th>VRAM</th>
               <th>Last seen</th>
             </tr>
           </thead>
@@ -50,6 +52,8 @@ export default function InstancesPage() {
                 <td>{it.is_alive ? 'yes' : 'no'}</td>
                 <td>{it.version ?? '—'}</td>
                 <td>{it.gpu_name ?? '—'}</td>
+                <td>{it.model_count ?? '—'}</td>
+                <td>{it.vram_total_gb ? `${it.vram_total_gb.toFixed(1)} GB` : '—'}</td>
                 <td>{fmt(it.last_seen_at)}</td>
               </tr>
             ))}

@@ -150,6 +150,7 @@ async def run_shodan_scan(session: Session, limit: int | None = None) -> ScanRun
         sem = asyncio.Semaphore(settings.VERIFY_CONCURRENCY)
 
         tasks = []
+        seen_targets: set[tuple[str, int]] = set()
         for m in matches:
             ip = m.get("ip_str")
             port = m.get("port")
@@ -158,6 +159,10 @@ async def run_shodan_scan(session: Session, limit: int | None = None) -> ScanRun
             service = _service_from_port(port)
             if not service:
                 continue
+            target = (ip, port)
+            if target in seen_targets:
+                continue
+            seen_targets.add(target)
             tasks.append(_verify_one(sem, ip, port, m))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)

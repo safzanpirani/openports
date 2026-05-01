@@ -2,24 +2,25 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import BackgroundTasks, Depends, FastAPI
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session, select
 
 from .config import settings
 from .db import get_session, init_db
-from .models import Instance, ScanRun
+from .models import Instance, ScanRun, Service
 from .scanner import run_shodan_scan
 from .security import require_admin
 
 
 app = FastAPI(title="openports")
 
+cors_origins = settings.cors_origins_list or ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=cors_origins,
+    allow_credentials="*" not in cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -148,10 +149,10 @@ def _startup() -> None:
 @app.get("/api/instances")
 def list_instances(
     session: Session = Depends(get_session),
-    service: str | None = None,
+    service: Service | None = None,
     alive: bool | None = None,
-    limit: int = 200,
-    offset: int = 0,
+    limit: int = Query(default=200, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
 ):
     stmt = (
         select(Instance)
@@ -160,7 +161,7 @@ def list_instances(
         .limit(limit)
     )
     if service:
-        stmt = stmt.where(Instance.service == service)  # type: ignore
+        stmt = stmt.where(Instance.service == service)
     if alive is not None:
         stmt = stmt.where(Instance.is_alive == alive)
     return session.exec(stmt).all()
@@ -169,11 +170,16 @@ def list_instances(
 @app.get("/api/instances/{instance_id}")
 def get_instance(instance_id: int, session: Session = Depends(get_session)):
     inst = session.get(Instance, instance_id)
+    if inst is None:
+        raise HTTPException(status_code=404, detail="Instance not found")
     return inst
 
 
 @app.get("/api/scan/runs")
-def list_runs(session: Session = Depends(get_session), limit: int = 50):
+def list_runs(
+    session: Session = Depends(get_session),
+    limit: int = Query(default=50, ge=1, le=500),
+):
     stmt = select(ScanRun).order_by(ScanRun.started_at.desc()).limit(limit)
     return session.exec(stmt).all()
 
@@ -196,8 +202,7 @@ def _run_shodan_scan_job(limit: int | None) -> None:
 @app.post("/api/scan/shodan", dependencies=[Depends(require_admin)])
 async def trigger_shodan_scan(
     background: BackgroundTasks,
-    session: Session = Depends(get_session),
-    limit: int | None = None,
+    limit: int | None = Query(default=None, ge=1, le=10000),
 ):
     # Run in background so the HTTP request returns quickly.
     # Note: for heavier workloads, split scanner into a separate worker process.
