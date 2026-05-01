@@ -478,6 +478,11 @@ async def main():
         },
     ]
 
+    if target_gpu and not target_model:
+        # Ollama does not reliably expose GPU details over HTTP; scanning it for a
+        # GPU-only target only burns provider quota and produces noisy Telegram warnings.
+        queries = [q for q in queries if q["service"] == Service.comfyui]
+
     providers = [
         ("shodan", True, scrape_shodan_page),
         (
