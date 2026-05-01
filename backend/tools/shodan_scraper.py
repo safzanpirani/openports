@@ -522,21 +522,18 @@ async def main():
 
                     if is_blocked:
                         blocked_hits += 1
+                        blocked_providers.append(f"{provider_name}/{service.value}")
+                        print(
+                            f"[!] [{provider_name}] Blocked or unauthorized for {service.value} on page {page}; stopping this provider."
+                        )
                         if provider_name == "shodan" and not warned_block:
                             warned_block = True
-                            blocked_providers.append(f"{provider_name}/{service.value}")
                             await send_telegram_message(
                                 f"⚠️ Shodan is rate-limiting/anti-bot blocking the scraper for {service.value} (page {page}). Stopping this provider; use API scan or refresh SHODAN_COOKIE."
                             )
-                            break
+                        break
                     else:
                         blocked_hits = 0
-
-                    if blocked_hits >= 3:
-                        print(
-                            f"[!] [{provider_name}] Repeated blocked responses for {service.value}; stopping this provider."
-                        )
-                        break
 
                     if not ips:
                         if page < page_limit:
