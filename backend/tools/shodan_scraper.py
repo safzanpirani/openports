@@ -491,6 +491,8 @@ async def main():
     ]
 
     page_limit = max_pages_override or DEFAULT_PAGES
+    found_any_target = False
+    blocked_providers: list[str] = []
 
     async with httpx.AsyncClient() as client:
         for cfg in queries:
@@ -517,9 +519,11 @@ async def main():
                         blocked_hits += 1
                         if provider_name == "shodan" and not warned_block:
                             warned_block = True
+                            blocked_providers.append(f"{provider_name}/{service.value}")
                             await send_telegram_message(
-                                f"⚠️ Shodan may be rate-limiting/anti-bot blocking the scraper for {service.value} (page {page})."
+                                f"⚠️ Shodan is rate-limiting/anti-bot blocking the scraper for {service.value} (page {page}). Stopping this provider; use API scan or refresh SHODAN_COOKIE."
                             )
+                            break
                     else:
                         blocked_hits = 0
 
@@ -545,6 +549,7 @@ async def main():
                         ips, port, service, force_rescan, target_gpu, target_model
                     )
                     if found_target:
+                        found_any_target = True
                         found_target_for_provider = True
                         print(
                             f"[+] [{provider_name}] Found target for {service.value}; stopping this provider early."
@@ -555,6 +560,13 @@ async def main():
 
                 if found_target_for_provider and (target_gpu or target_model):
                     break
+
+    summary = "✅ Scraper finished."
+    if target_gpu or target_model:
+        summary += " Target found." if found_any_target else " No target matched in scanned results."
+    if blocked_providers:
+        summary += " Blocked providers: " + ", ".join(sorted(set(blocked_providers))) + "."
+    await send_telegram_message(summary)
 
 
 if __name__ == "__main__":
