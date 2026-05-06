@@ -15,6 +15,16 @@ class Service(str, Enum):
     sdwebui = "sdwebui"
     openwebui = "openwebui"
     jupyter = "jupyter"
+    vllm = "vllm"
+    tgi = "tgi"
+    ray = "ray"
+    triton = "triton"
+    tgwebui = "tgwebui"
+    lmstudio = "lmstudio"
+    sglang = "sglang"
+    llamacpp = "llamacpp"
+    litellm = "litellm"
+    tensorboard = "tensorboard"
 
 
 class Instance(SQLModel, table=True):

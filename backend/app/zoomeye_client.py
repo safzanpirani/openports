@@ -76,7 +76,10 @@ def _search(query: str, port: int, page: int = 1) -> list[dict[str, Any]]:
     return out
 
 
-SUPPORTED_PORTS = (8188, 11434, 7860, 3000, 8888)
+SUPPORTED_PORTS = (
+    8188, 11434, 7860, 3000, 8888,
+    8000, 8080, 8265, 5000, 1234, 30000, 4000, 6006,
+)
 
 
 def candidates_for_ports(limit: int) -> list[dict[str, Any]]:

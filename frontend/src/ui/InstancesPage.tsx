@@ -490,7 +490,11 @@ export default function InstancesPage() {
           title="service filter"
         >
           <option value="">all services</option>
-          {(['comfyui', 'ollama', 'sdwebui', 'openwebui', 'jupyter'] as Service[]).map((svc) => {
+          {([
+            'comfyui', 'ollama', 'sdwebui', 'openwebui', 'jupyter',
+            'vllm', 'tgi', 'ray', 'triton', 'tgwebui', 'lmstudio',
+            'sglang', 'llamacpp', 'litellm', 'tensorboard',
+          ] as Service[]).map((svc) => {
             const c = stats?.by_service[svc]
             return (
               <option key={svc} value={svc}>

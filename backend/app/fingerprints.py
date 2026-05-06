@@ -375,6 +375,424 @@ async def verify_jupyter(base_url: str, client: httpx.AsyncClient) -> tuple[bool
     return ok, metadata, models, version, metrics
 
 
+async def verify_vllm(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
+    """vLLM exposes OpenAI-compatible /v1/models. Health at /health (200 OK)."""
+    metadata: dict[str, Any] | None = None
+    models: dict[str, Any] | None = None
+    version: str | None = None
+
+    try:
+        r = await client.get(f"{base_url}/v1/models")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict) and isinstance(data.get("data"), list):
+                models = {"data": data["data"]}
+                if data.get("object") == "list" and len(data["data"]) > 0:
+                    metadata = {"product": "vllm-or-openai-compat"}
+    except Exception:
+        pass
+
+    try:
+        r = await client.get(f"{base_url}/version")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict) and isinstance(data.get("version"), str):
+                version = data["version"]
+                metadata = metadata or {}
+                if isinstance(metadata, dict):
+                    metadata["product"] = "vllm"
+    except Exception:
+        pass
+
+    ok = metadata is not None
+    model_count = None
+    if isinstance(models, dict) and isinstance(models.get("data"), list):
+        model_count = len(models["data"])
+    metrics = {
+        "vram_total_gb": None, "vram_free_gb": None, "ram_total_gb": None, "ram_free_gb": None,
+        "model_count": model_count, "node_count": None, "max_model_params": None, "max_context": None,
+    }
+    return ok, metadata, models, version, metrics
+
+
+async def verify_tgi(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
+    """HuggingFace Text Generation Inference: /info returns model_id + max_input_length etc."""
+    metadata: dict[str, Any] | None = None
+    models: dict[str, Any] | None = None
+    version: str | None = None
+
+    try:
+        r = await client.get(f"{base_url}/info")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict) and isinstance(data.get("model_id"), str):
+                metadata = data
+                version = data.get("version") if isinstance(data.get("version"), str) else None
+                models = {"data": [{"id": data["model_id"]}]}
+    except Exception:
+        pass
+
+    ok = metadata is not None
+    max_context = None
+    if isinstance(metadata, dict):
+        for k in ("max_total_tokens", "max_input_length"):
+            v = metadata.get(k)
+            if isinstance(v, int) and (max_context is None or v > max_context):
+                max_context = v
+    metrics = {
+        "vram_total_gb": None, "vram_free_gb": None, "ram_total_gb": None, "ram_free_gb": None,
+        "model_count": 1 if ok else None, "node_count": None,
+        "max_model_params": None, "max_context": max_context,
+    }
+    return ok, metadata, models, version, metrics
+
+
+async def verify_triton(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
+    """NVIDIA Triton Inference Server: /v2/health/ready and /v2."""
+    metadata: dict[str, Any] | None = None
+    models: dict[str, Any] | None = None
+    version: str | None = None
+
+    try:
+        r = await client.get(f"{base_url}/v2")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict) and isinstance(data.get("name"), str):
+                metadata = data
+                version = data.get("version") if isinstance(data.get("version"), str) else None
+    except Exception:
+        pass
+
+    if metadata is not None:
+        try:
+            r = await client.post(f"{base_url}/v2/repository/index", json={})
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list):
+                    models = {"data": data}
+        except Exception:
+            pass
+
+    ok = metadata is not None
+    metrics = {
+        "vram_total_gb": None, "vram_free_gb": None, "ram_total_gb": None, "ram_free_gb": None,
+        "model_count": (len(models["data"]) if isinstance(models, dict) and isinstance(models.get("data"), list) else None),
+        "node_count": None, "max_model_params": None, "max_context": None,
+    }
+    return ok, metadata, models, version, metrics
+
+
+async def verify_ray(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
+    """Ray dashboard: /api/cluster_status and /api/snapshot.
+
+    These reveal the whole cluster — GPU/CPU counts, resources, jobs.
+    """
+    metadata: dict[str, Any] | None = None
+    models: dict[str, Any] | None = None
+    version: str | None = None
+
+    try:
+        r = await client.get(f"{base_url}/api/version")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict):
+                version = data.get("ray_version") or data.get("version")
+    except Exception:
+        pass
+
+    try:
+        r = await client.get(f"{base_url}/api/cluster_status")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict):
+                metadata = data
+    except Exception:
+        pass
+
+    ok = metadata is not None
+    if not ok:
+        try:
+            r = await client.get(f"{base_url}/")
+            if r.status_code == 200 and "ray" in (r.text or "").lower()[:5000]:
+                ok = True
+                metadata = {"product": "ray-dashboard"}
+        except Exception:
+            pass
+
+    # Ray reveals total GPU/CPU resources at the cluster level. Best-effort
+    # extraction lives behind a guard since the schema varies between versions.
+    vram_total_gb = None
+    if isinstance(metadata, dict):
+        try:
+            data = metadata.get("data") or metadata
+            cluster = data.get("clusterStatus") or data
+            avail = cluster.get("autoscalerReport", {}).get("clusterStatus", {}) if isinstance(cluster, dict) else {}
+            # Just leave vram null — Ray's resource map is keyed by node not by GPU GB.
+        except Exception:
+            pass
+
+    metrics = {
+        "vram_total_gb": vram_total_gb, "vram_free_gb": None, "ram_total_gb": None, "ram_free_gb": None,
+        "model_count": None, "node_count": None, "max_model_params": None, "max_context": None,
+    }
+    return ok, metadata, models, version, metrics
+
+
+async def verify_tgwebui(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
+    """oobabooga text-generation-webui API mode: /v1/models (OpenAI-compatible)
+    plus /v1/internal/model/info for the loaded model.
+    """
+    metadata: dict[str, Any] | None = None
+    models: dict[str, Any] | None = None
+    version: str | None = None
+
+    try:
+        r = await client.get(f"{base_url}/v1/internal/model/info")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict) and isinstance(data.get("model_name"), str):
+                metadata = data
+    except Exception:
+        pass
+
+    try:
+        r = await client.get(f"{base_url}/v1/models")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict) and isinstance(data.get("data"), list):
+                models = {"data": data["data"]}
+    except Exception:
+        pass
+
+    ok = metadata is not None
+    metrics = {
+        "vram_total_gb": None, "vram_free_gb": None, "ram_total_gb": None, "ram_free_gb": None,
+        "model_count": (len(models["data"]) if isinstance(models, dict) and isinstance(models.get("data"), list) else None),
+        "node_count": None, "max_model_params": None, "max_context": None,
+    }
+    return ok, metadata, models, version, metrics
+
+
+async def verify_lmstudio(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
+    """LMStudio server mode (default :1234): OpenAI-compatible /v1/models +
+    LMStudio-specific /api/v0/models with extra metadata.
+    """
+    metadata: dict[str, Any] | None = None
+    models: dict[str, Any] | None = None
+    version: str | None = None
+
+    try:
+        r = await client.get(f"{base_url}/api/v0/models")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict) and isinstance(data.get("data"), list):
+                models = {"data": data["data"]}
+                metadata = {"product": "lmstudio"}
+    except Exception:
+        pass
+
+    if metadata is None:
+        try:
+            r = await client.get(f"{base_url}/v1/models")
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, dict) and isinstance(data.get("data"), list):
+                    # OpenAI-compatible — could also be vllm/tgwebui. Use it
+                    # as a positive ID only; mark as generic.
+                    models = {"data": data["data"]}
+                    metadata = {"product": "openai-compat"}
+        except Exception:
+            pass
+
+    ok = metadata is not None
+    metrics = {
+        "vram_total_gb": None, "vram_free_gb": None, "ram_total_gb": None, "ram_free_gb": None,
+        "model_count": (len(models["data"]) if isinstance(models, dict) and isinstance(models.get("data"), list) else None),
+        "node_count": None, "max_model_params": None, "max_context": None,
+    }
+    return ok, metadata, models, version, metrics
+
+
+async def verify_sglang(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
+    """SGLang serving runtime. Default :30000.
+
+    Has OpenAI-compatible /v1/models AND SGLang-specific /get_model_info
+    + /get_server_info. The latter discriminates from generic OpenAI-compat.
+    """
+    metadata: dict[str, Any] | None = None
+    models: dict[str, Any] | None = None
+    version: str | None = None
+
+    try:
+        r = await client.get(f"{base_url}/get_model_info")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict):
+                metadata = {"product": "sglang", **data}
+                if isinstance(data.get("model_path"), str):
+                    models = {"data": [{"id": data["model_path"]}]}
+    except Exception:
+        pass
+
+    try:
+        r = await client.get(f"{base_url}/get_server_info")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict):
+                if metadata is None:
+                    metadata = {"product": "sglang", **data}
+                else:
+                    metadata.update(data)
+                if isinstance(data.get("version"), str):
+                    version = data["version"]
+    except Exception:
+        pass
+
+    ok = metadata is not None
+    metrics = {
+        "vram_total_gb": None, "vram_free_gb": None, "ram_total_gb": None, "ram_free_gb": None,
+        "model_count": 1 if ok else None, "node_count": None,
+        "max_model_params": None, "max_context": None,
+    }
+    return ok, metadata, models, version, metrics
+
+
+async def verify_llamacpp(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
+    """llama.cpp `server` binary. Often :8080 or :8000.
+
+    Discriminating endpoints: /props (returns chat_template + system_prompt
+    + n_ctx) and /slots. /v1/models is OpenAI-compatible but not unique.
+    """
+    metadata: dict[str, Any] | None = None
+    models: dict[str, Any] | None = None
+    version: str | None = None
+
+    try:
+        r = await client.get(f"{base_url}/props")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict) and (
+                "chat_template" in data or "default_generation_settings" in data
+            ):
+                metadata = {"product": "llama.cpp", **data}
+    except Exception:
+        pass
+
+    if metadata is not None:
+        try:
+            r = await client.get(f"{base_url}/v1/models")
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, dict) and isinstance(data.get("data"), list):
+                    models = {"data": data["data"]}
+        except Exception:
+            pass
+
+    ok = metadata is not None
+    max_context = None
+    if isinstance(metadata, dict):
+        for k in ("n_ctx_train", "n_ctx", "default_generation_settings"):
+            v = metadata.get(k)
+            if isinstance(v, int) and (max_context is None or v > max_context):
+                max_context = v
+            elif isinstance(v, dict):
+                inner = v.get("n_ctx") or v.get("n_ctx_train")
+                if isinstance(inner, int) and (max_context is None or inner > max_context):
+                    max_context = inner
+    metrics = {
+        "vram_total_gb": None, "vram_free_gb": None, "ram_total_gb": None, "ram_free_gb": None,
+        "model_count": (len(models["data"]) if isinstance(models, dict) and isinstance(models.get("data"), list) else None),
+        "node_count": None, "max_model_params": None, "max_context": max_context,
+    }
+    return ok, metadata, models, version, metrics
+
+
+async def verify_litellm(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
+    """LiteLLM proxy. Default :4000. /health/liveliness and /v1/models."""
+    metadata: dict[str, Any] | None = None
+    models: dict[str, Any] | None = None
+    version: str | None = None
+
+    try:
+        r = await client.get(f"{base_url}/health/liveliness")
+        if r.status_code == 200:
+            metadata = {"product": "litellm"}
+    except Exception:
+        pass
+
+    if metadata is None:
+        try:
+            r = await client.get(f"{base_url}/")
+            if r.status_code == 200:
+                t = (r.text or "")[:5000].lower()
+                if "litellm" in t:
+                    metadata = {"product": "litellm"}
+        except Exception:
+            pass
+
+    if metadata is not None:
+        try:
+            r = await client.get(f"{base_url}/v1/models")
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, dict) and isinstance(data.get("data"), list):
+                    models = {"data": data["data"]}
+        except Exception:
+            pass
+
+    ok = metadata is not None
+    metrics = {
+        "vram_total_gb": None, "vram_free_gb": None, "ram_total_gb": None, "ram_free_gb": None,
+        "model_count": (len(models["data"]) if isinstance(models, dict) and isinstance(models.get("data"), list) else None),
+        "node_count": None, "max_model_params": None, "max_context": None,
+    }
+    return ok, metadata, models, version, metrics
+
+
+async def verify_tensorboard(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
+    """Tensorboard. Default :6006. Signals an active training job nearby."""
+    metadata: dict[str, Any] | None = None
+    models: dict[str, Any] | None = None
+    version: str | None = None
+
+    try:
+        r = await client.get(f"{base_url}/data/environment")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict) and isinstance(data.get("version"), str):
+                metadata = {"product": "tensorboard", **data}
+                version = data["version"]
+    except Exception:
+        pass
+
+    if metadata is None:
+        try:
+            r = await client.get(f"{base_url}/data/runs")
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list):
+                    metadata = {"product": "tensorboard"}
+                    models = {"data": data}
+        except Exception:
+            pass
+
+    if metadata is None:
+        try:
+            r = await client.get(f"{base_url}/")
+            if r.status_code == 200 and "tensorboard" in (r.text or "").lower()[:5000]:
+                metadata = {"product": "tensorboard"}
+        except Exception:
+            pass
+
+    ok = metadata is not None
+    metrics = {
+        "vram_total_gb": None, "vram_free_gb": None, "ram_total_gb": None, "ram_free_gb": None,
+        "model_count": None, "node_count": None,
+        "max_model_params": None, "max_context": None,
+    }
+    return ok, metadata, models, version, metrics
+
+
 async def verify_ollama(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
     """Returns (ok, metadata, models, version, metrics).
     

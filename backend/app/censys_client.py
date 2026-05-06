@@ -38,7 +38,25 @@ CENSYS_HOSTS_SEARCH = "https://search.censys.io/api/v2/hosts/search"
 
 
 def _enabled() -> bool:
-    return bool(settings.CENSYS_API_ID and settings.CENSYS_API_SECRET)
+    if settings.CENSYS_API_ID and settings.CENSYS_API_SECRET:
+        return True
+    if settings.CENSYS_API_KEY:
+        return True
+    return False
+
+
+def _auth_kwargs() -> dict[str, Any]:
+    """Return the right httpx auth args for whichever credential shape is set.
+
+    Censys supports two auth modes:
+      - classic: HTTP Basic with API_ID + API_SECRET (legacy)
+      - PAT: Bearer with a single CENSYS_API_KEY token (`censys_...` prefix)
+    """
+    if settings.CENSYS_API_ID and settings.CENSYS_API_SECRET:
+        return {"auth": (settings.CENSYS_API_ID, settings.CENSYS_API_SECRET)}
+    if settings.CENSYS_API_KEY:
+        return {"headers": {"Authorization": f"Bearer {settings.CENSYS_API_KEY}"}}
+    return {}
 
 
 def _compact(hit: dict[str, Any], port: int) -> dict[str, Any]:
@@ -72,12 +90,11 @@ def _compact(hit: dict[str, Any], port: int) -> dict[str, Any]:
 def _search(query: str, port: int, per_page: int) -> list[dict[str, Any]]:
     if not _enabled():
         return []
-    auth = (settings.CENSYS_API_ID or "", settings.CENSYS_API_SECRET or "")
     payload = {"q": query, "per_page": min(max(per_page, 1), 100)}
     out: list[dict[str, Any]] = []
     try:
         with httpx.Client(timeout=15.0) as client:
-            r = client.post(CENSYS_HOSTS_SEARCH, params=payload, auth=auth)
+            r = client.post(CENSYS_HOSTS_SEARCH, params=payload, **_auth_kwargs())
             if r.status_code != 200:
                 log.warning("censys %s -> %s: %s", query, r.status_code, r.text[:300])
                 return []
@@ -92,7 +109,10 @@ def _search(query: str, port: int, per_page: int) -> list[dict[str, Any]]:
     return out
 
 
-SUPPORTED_PORTS = (8188, 11434, 7860, 3000, 8888)
+SUPPORTED_PORTS = (
+    8188, 11434, 7860, 3000, 8888,
+    8000, 8080, 8265, 5000, 1234, 30000, 4000, 6006,
+)
 
 
 def candidates_for_ports(limit: int) -> list[dict[str, Any]]:

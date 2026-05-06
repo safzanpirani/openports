@@ -79,7 +79,11 @@ export default function ModelsPage() {
           onChange={(e) => setQp({ service: e.target.value || null })}
         >
           <option value="">all services</option>
-          {(['comfyui', 'ollama', 'sdwebui', 'openwebui', 'jupyter'] as Service[]).map((s) => (
+          {([
+            'comfyui', 'ollama', 'sdwebui', 'openwebui', 'jupyter',
+            'vllm', 'tgi', 'ray', 'triton', 'tgwebui', 'lmstudio',
+            'sglang', 'llamacpp', 'litellm', 'tensorboard',
+          ] as Service[]).map((s) => (
             <option key={s} value={s}>{s}</option>
           ))}
         </select>

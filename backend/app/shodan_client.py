@@ -16,7 +16,21 @@ def shodan_search(query: str, limit: int) -> list[dict[str, Any]]:
     return list(res.get("matches", []))
 
 
-SUPPORTED_PORTS = (8188, 11434, 7860, 3000, 8888)
+SUPPORTED_PORTS = (
+    8188,   # comfyui
+    11434,  # ollama
+    7860,   # sdwebui / a1111 / forge
+    3000,   # openwebui
+    8888,   # jupyter
+    8000,   # vllm / triton
+    8080,   # tgi / llama.cpp / openwebui (alt)
+    8265,   # ray dashboard
+    5000,   # text-generation-webui
+    1234,   # lmstudio
+    30000,  # sglang
+    4000,   # litellm
+    6006,   # tensorboard
+)
 
 
 def candidates_for_ports(limit: int, ports: tuple[int, ...] = SUPPORTED_PORTS) -> list[dict[str, Any]]:

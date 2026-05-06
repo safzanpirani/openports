@@ -1,4 +1,19 @@
-export type Service = 'comfyui' | 'ollama'
+export type Service =
+  | 'comfyui'
+  | 'ollama'
+  | 'sdwebui'
+  | 'openwebui'
+  | 'jupyter'
+  | 'vllm'
+  | 'tgi'
+  | 'ray'
+  | 'triton'
+  | 'tgwebui'
+  | 'lmstudio'
+  | 'sglang'
+  | 'llamacpp'
+  | 'litellm'
+  | 'tensorboard'
 
 export type Instance = {
   id: number
@@ -207,7 +222,7 @@ export async function deleteAlert(id: number, adminToken?: string): Promise<void
   if (!r.ok) throw new Error(`delete alert failed: ${await r.text()}`)
 }
 
-export type CatalogEntry = { service: 'comfyui' | 'ollama'; name: string; count: number }
+export type CatalogEntry = { service: Service; name: string; count: number }
 
 export async function fetchCatalog(p?: {
   service?: Service

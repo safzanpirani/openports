@@ -10,7 +10,12 @@ from sqlmodel import Session, select
 from .alerts import evaluate_alerts
 from .config import settings
 from .enrich_hosting import classify_provider, enrich_ip_hosting
-from .fingerprints import verify_comfyui, verify_jupyter, verify_ollama, verify_openwebui, verify_sdwebui
+from .fingerprints import (
+    verify_comfyui, verify_jupyter, verify_litellm, verify_llamacpp,
+    verify_lmstudio, verify_ollama, verify_openwebui, verify_ray,
+    verify_sdwebui, verify_sglang, verify_tensorboard, verify_tgi,
+    verify_tgwebui, verify_triton, verify_vllm,
+)
 from .models import Instance, InstanceChange, InstanceCheck, ScanRun, Service
 from .models_summary import diff_names, model_names
 from .shodan_client import candidates_for_ports
@@ -18,6 +23,12 @@ from .telegram import send_telegram_message
 
 
 def _service_from_port(port: int) -> Service | None:
+    """Map a port to its likely (default) service.
+
+    For ports where multiple frameworks collide (8000 = vLLM/Triton, 8080 =
+    TGI/llama.cpp/OpenWebUI), the value here is just the *first probe order*
+    used by `_verify_one`; if the first probe fails we cascade to the next.
+    """
     if port == 8188:
         return Service.comfyui
     if port == 11434:
@@ -28,6 +39,22 @@ def _service_from_port(port: int) -> Service | None:
         return Service.openwebui
     if port == 8888:
         return Service.jupyter
+    if port == 8000:
+        return Service.vllm
+    if port == 8080:
+        return Service.tgi
+    if port == 8265:
+        return Service.ray
+    if port == 5000:
+        return Service.tgwebui
+    if port == 1234:
+        return Service.lmstudio
+    if port == 30000:
+        return Service.sglang
+    if port == 4000:
+        return Service.litellm
+    if port == 6006:
+        return Service.tensorboard
     return None
 
 
@@ -104,6 +131,41 @@ async def _verify_one(
             if port == 8888:
                 ok, meta, models, version, metrics = await verify_jupyter(base_url, client)
                 return Service.jupyter, ip, port, ok, meta, models, version, None, shodan_compact, metrics
+            if port == 8000:
+                # 8000 collision: try Triton first (strict /v2 endpoint), then vLLM.
+                ok, meta, models, version, metrics = await verify_triton(base_url, client)
+                if ok:
+                    return Service.triton, ip, port, ok, meta, models, version, None, shodan_compact, metrics
+                ok, meta, models, version, metrics = await verify_vllm(base_url, client)
+                return Service.vllm, ip, port, ok, meta, models, version, None, shodan_compact, metrics
+            if port == 8080:
+                # 8080 collision: TGI → llama.cpp → OpenWebUI.
+                ok, meta, models, version, metrics = await verify_tgi(base_url, client)
+                if ok:
+                    return Service.tgi, ip, port, ok, meta, models, version, None, shodan_compact, metrics
+                ok, meta, models, version, metrics = await verify_llamacpp(base_url, client)
+                if ok:
+                    return Service.llamacpp, ip, port, ok, meta, models, version, None, shodan_compact, metrics
+                ok, meta, models, version, metrics = await verify_openwebui(base_url, client)
+                return Service.openwebui, ip, port, ok, meta, models, version, None, shodan_compact, metrics
+            if port == 8265:
+                ok, meta, models, version, metrics = await verify_ray(base_url, client)
+                return Service.ray, ip, port, ok, meta, models, version, None, shodan_compact, metrics
+            if port == 5000:
+                ok, meta, models, version, metrics = await verify_tgwebui(base_url, client)
+                return Service.tgwebui, ip, port, ok, meta, models, version, None, shodan_compact, metrics
+            if port == 1234:
+                ok, meta, models, version, metrics = await verify_lmstudio(base_url, client)
+                return Service.lmstudio, ip, port, ok, meta, models, version, None, shodan_compact, metrics
+            if port == 30000:
+                ok, meta, models, version, metrics = await verify_sglang(base_url, client)
+                return Service.sglang, ip, port, ok, meta, models, version, None, shodan_compact, metrics
+            if port == 4000:
+                ok, meta, models, version, metrics = await verify_litellm(base_url, client)
+                return Service.litellm, ip, port, ok, meta, models, version, None, shodan_compact, metrics
+            if port == 6006:
+                ok, meta, models, version, metrics = await verify_tensorboard(base_url, client)
+                return Service.tensorboard, ip, port, ok, meta, models, version, None, shodan_compact, metrics
 
     # unreachable
     raise RuntimeError("unsupported port")
