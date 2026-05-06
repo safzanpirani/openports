@@ -229,6 +229,31 @@ def _build_filtered_query(
     return stmt
 
 
+@app.get("/api/instances/count")
+def count_instances(
+    session: Session = Depends(get_session),
+    service: Service | None = None,
+    alive: bool | None = None,
+    provider: str | None = None,
+    q: str | None = None,
+    model: str | None = None,
+    gpu: str | None = None,
+    country: str | None = None,
+    since_hours: int | None = Query(default=None, ge=1, le=24 * 365),
+    min_vram: float | None = Query(default=None, ge=0),
+):
+    stmt = _build_filtered_query(
+        service=service, alive=alive, provider=provider, q=q, model=model,
+        gpu=gpu, country=country, since_hours=since_hours, min_vram=min_vram,
+        sort_by=None, sort_dir=None,
+    )
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    n = session.exec(count_stmt).one()
+    if isinstance(n, tuple):
+        n = n[0]
+    return {"count": int(n or 0)}
+
+
 @app.get("/api/instances")
 def list_instances(
     session: Session = Depends(get_session),

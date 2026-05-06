@@ -85,6 +85,15 @@ export async function fetchInstances(p?: InstanceQuery): Promise<Instance[]> {
   return r.json()
 }
 
+export async function countInstances(p?: InstanceQuery): Promise<number> {
+  // The count endpoint ignores limit/offset/sort; pass everything else.
+  const { limit: _l, offset: _o, sort_by: _sb, sort_dir: _sd, ...rest } = p ?? {}
+  const r = await fetch('/api/instances/count' + toSearch(rest))
+  if (!r.ok) throw new Error('failed to count instances')
+  const j = await r.json()
+  return j.count as number
+}
+
 export async function fetchInstance(id: string): Promise<Instance> {
   const r = await fetch(`/api/instances/${id}`)
   if (!r.ok) throw new Error('failed to load instance')

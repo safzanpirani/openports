@@ -89,6 +89,68 @@ export function setAdminToken(t: string): void {
   else localStorage.removeItem('ADMIN_TOKEN')
 }
 
+// Map common Shodan country names to ISO-2 → emoji flag.
+const COUNTRY_TO_ISO2: Record<string, string> = {
+  'United States': 'US',
+  'United Kingdom': 'GB',
+  Germany: 'DE',
+  France: 'FR',
+  Netherlands: 'NL',
+  Singapore: 'SG',
+  Japan: 'JP',
+  China: 'CN',
+  Korea: 'KR',
+  'South Korea': 'KR',
+  India: 'IN',
+  Canada: 'CA',
+  Australia: 'AU',
+  Brazil: 'BR',
+  Russia: 'RU',
+  Italy: 'IT',
+  Spain: 'ES',
+  Sweden: 'SE',
+  Switzerland: 'CH',
+  Poland: 'PL',
+  Ireland: 'IE',
+  Belgium: 'BE',
+  Austria: 'AT',
+  Norway: 'NO',
+  Finland: 'FI',
+  Denmark: 'DK',
+  Greece: 'GR',
+  Portugal: 'PT',
+  'Czech Republic': 'CZ',
+  Czechia: 'CZ',
+  'Hong Kong': 'HK',
+  Taiwan: 'TW',
+  Indonesia: 'ID',
+  Vietnam: 'VN',
+  Thailand: 'TH',
+  'United Arab Emirates': 'AE',
+  Israel: 'IL',
+  'South Africa': 'ZA',
+  Mexico: 'MX',
+  Argentina: 'AR',
+  Chile: 'CL',
+  Turkey: 'TR',
+  Ukraine: 'UA',
+  Romania: 'RO',
+  Hungary: 'HU',
+  Bulgaria: 'BG',
+  'New Zealand': 'NZ',
+  Malaysia: 'MY',
+  Philippines: 'PH',
+}
+
+export function flagOf(countryName?: string | null): string {
+  if (!countryName) return ''
+  const iso = COUNTRY_TO_ISO2[countryName]
+  if (!iso || iso.length !== 2) return ''
+  const A = 0x1f1e6
+  const a = 'A'.charCodeAt(0)
+  return String.fromCodePoint(A + (iso.charCodeAt(0) - a)) + String.fromCodePoint(A + (iso.charCodeAt(1) - a))
+}
+
 export function copy(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text)
   return new Promise((resolve, reject) => {
