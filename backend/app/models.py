@@ -98,3 +98,34 @@ class InstanceChange(SQLModel, table=True):
     kind: str = Field(index=True)
     before: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
     after: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+
+
+class Alert(SQLModel, table=True):
+    """A standing alert that fires a Telegram message when matching events occur.
+
+    `kind` is one of:
+      - `new_instance`     : fires on first_seen
+      - `alive_changed`    : fires on alive flip (use after.alive matched in filter)
+      - `models_added`     : fires when models_changed has any added entries
+
+    `filter_json` shape (all optional, ANDed):
+      { service?: 'comfyui' | 'ollama',
+        gpu?: <substring>,        # case-insensitive contains
+        min_vram?: <float GB>,
+        model?: <substring>,      # case-insensitive contains; on models_added
+                                  # matches any added entry; otherwise matches
+                                  # any current model name on the instance
+        country?: <exact name>,
+        min_max_params?: <float B>,
+        provider?: <classification>,
+      }
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    kind: str = Field(index=True)
+    filter_json: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    enabled: bool = Field(default=True, index=True)
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    last_fired_at: datetime | None = Field(default=None)
+    fired_count: int = Field(default=0)

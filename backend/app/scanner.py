@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 from sqlmodel import Session, select
 
+from .alerts import evaluate_alerts
 from .config import settings
 from .enrich_hosting import classify_provider, enrich_ip_hosting
 from .fingerprints import verify_comfyui, verify_ollama
@@ -146,6 +147,8 @@ def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok:
     session.refresh(inst)
 
     # Append a check row + any change rows. Best-effort; never abort the upsert.
+    alive_flipped: bool | None = None
+    models_added: list[str] | None = None
     try:
         check = InstanceCheck(
             instance_id=inst.id,
@@ -173,6 +176,7 @@ def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok:
                     instance_id=inst.id, at=now, kind="alive_changed",
                     before={"alive": pre_alive}, after={"alive": inst.is_alive},
                 ))
+                alive_flipped = bool(inst.is_alive)
             if pre_version != inst.version and inst.version:
                 session.add(InstanceChange(
                     instance_id=inst.id, at=now, kind="version_changed",
@@ -192,9 +196,22 @@ def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok:
                         before={"count": len(pre_models)},
                         after={"count": len(post_models), **d},
                     ))
+                    if d["added"]:
+                        models_added = list(d["added"])
         session.commit()
     except Exception:
         session.rollback()
+
+    # Standing alerts. Best-effort; never aborts upsert.
+    try:
+        evaluate_alerts(
+            session, inst,
+            is_first_seen=created,
+            alive_flipped=alive_flipped,
+            models_added=models_added,
+        )
+    except Exception:
+        pass
 
     return inst, created
 

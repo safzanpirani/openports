@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, NavLink, Route, Routes } from 'react-router-dom'
+import AlertsPage from './AlertsPage'
 import InstancesPage from './InstancesPage'
 import InstanceDetailPage from './InstanceDetailPage'
 import ModelsPage from './ModelsPage'
@@ -41,6 +42,9 @@ export default function App() {
           <NavLink to="/models" className={({ isActive }) => (isActive ? 'active plain' : 'plain')}>
             models
           </NavLink>
+          <NavLink to="/alerts" className={({ isActive }) => (isActive ? 'active plain' : 'plain')}>
+            alerts
+          </NavLink>
           <NavLink to="/runs" className={({ isActive }) => (isActive ? 'active plain' : 'plain')}>
             scans
           </NavLink>
@@ -59,6 +63,7 @@ export default function App() {
         <Route path="/" element={<InstancesPage />} />
         <Route path="/instances/:id" element={<InstanceDetailPage />} />
         <Route path="/models" element={<ModelsPage />} />
+        <Route path="/alerts" element={<AlertsPage />} />
         <Route path="/runs" element={<RunsPage />} />
       </Routes>
     </div>

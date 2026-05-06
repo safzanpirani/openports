@@ -154,6 +154,58 @@ export async function fetchChanges(id: number, limit = 100): Promise<InstanceCha
   return r.json()
 }
 
+export type Alert = {
+  id: number
+  name: string
+  kind: 'new_instance' | 'models_added' | 'alive_changed'
+  filter_json: Record<string, any>
+  enabled: boolean
+  created_at: string
+  last_fired_at?: string | null
+  fired_count: number
+}
+
+export async function fetchAlerts(): Promise<Alert[]> {
+  const r = await fetch('/api/alerts')
+  if (!r.ok) throw new Error('failed to load alerts')
+  return r.json()
+}
+
+export async function createAlert(
+  body: { name: string; kind: Alert['kind']; filter_json: Record<string, any>; enabled?: boolean },
+  adminToken?: string,
+): Promise<Alert> {
+  const r = await fetch('/api/alerts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...adminHeaders(adminToken) },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`create alert failed: ${await r.text()}`)
+  return r.json()
+}
+
+export async function patchAlert(
+  id: number,
+  body: { name: string; kind: Alert['kind']; filter_json: Record<string, any>; enabled: boolean },
+  adminToken?: string,
+): Promise<Alert> {
+  const r = await fetch(`/api/alerts/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...adminHeaders(adminToken) },
+    body: JSON.stringify(body),
+  })
+  if (!r.ok) throw new Error(`update alert failed: ${await r.text()}`)
+  return r.json()
+}
+
+export async function deleteAlert(id: number, adminToken?: string): Promise<void> {
+  const r = await fetch(`/api/alerts/${id}`, {
+    method: 'DELETE',
+    headers: adminHeaders(adminToken),
+  })
+  if (!r.ok) throw new Error(`delete alert failed: ${await r.text()}`)
+}
+
 export type CatalogEntry = { service: 'comfyui' | 'ollama'; name: string; count: number }
 
 export async function fetchCatalog(p?: {

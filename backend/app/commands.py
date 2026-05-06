@@ -11,7 +11,7 @@ from sqlalchemy import Text, cast, func
 from sqlmodel import Session, select
 
 from .config import settings
-from .models import Instance, ScanRun, Service
+from .models import Alert, Instance, InstanceChange, ScanRun, Service
 from .recheck import run_recheck
 from .scanner import run_shodan_scan
 from .telegram import send_telegram_message
@@ -29,6 +29,8 @@ HELP = """available commands
 /find gpu <name> — list alive instances with that gpu (substring)
 /find model <name> — list alive instances with that model (substring)
 /find country <name> — list alive instances in that country
+/diff <id> — show recent changes for an instance
+/alerts — list standing alerts
 /scan — trigger one shodan scan (port:8188 or port:11434)
 /recheck [n] [force] [alive] — re-fingerprint up to n stored instances
 /scrape ... — shodan web bot scraper (existing)"""
@@ -125,6 +127,63 @@ async def _cmd_top(engine, n: int) -> str:
     return _format_rows(rows, f"top {n} alive by vram", max_lines=n)
 
 
+async def _cmd_diff(engine, instance_id: int, n: int = 10) -> str:
+    with Session(engine) as s:
+        inst = s.get(Instance, instance_id)
+        if inst is None:
+            return f"no instance with id {instance_id}"
+        rows = list(s.exec(
+            select(InstanceChange)
+            .where(InstanceChange.instance_id == instance_id)
+            .order_by(InstanceChange.at.desc())
+            .limit(n)
+        ).all())
+    header = f"changes for #{instance_id} ({inst.service.value} · http://{inst.ip}:{inst.port})"
+    if not rows:
+        return f"{header}\n(no changes recorded)"
+    lines = [header]
+    for r in rows:
+        ts = r.at.strftime("%m-%d %H:%M")
+        if r.kind == "first_seen":
+            lines.append(f"{ts} · first seen")
+        elif r.kind == "alive_changed":
+            new = (r.after or {}).get("alive")
+            lines.append(f"{ts} · {'came back alive' if new else 'went down'}")
+        elif r.kind == "version_changed":
+            b = (r.before or {}).get("version") or "—"
+            a = (r.after or {}).get("version") or "—"
+            lines.append(f"{ts} · version {b} → {a}")
+        elif r.kind == "gpu_changed":
+            b = (r.before or {}).get("gpu") or "—"
+            a = (r.after or {}).get("gpu") or "—"
+            lines.append(f"{ts} · gpu {b} → {a}")
+        elif r.kind == "models_changed":
+            added = (r.after or {}).get("added") or []
+            removed = (r.after or {}).get("removed") or []
+            lines.append(f"{ts} · models +{len(added)} −{len(removed)}")
+        else:
+            lines.append(f"{ts} · {r.kind}")
+    return "\n".join(lines)
+
+
+async def _cmd_alerts(engine) -> str:
+    with Session(engine) as s:
+        rows = list(s.exec(select(Alert).order_by(Alert.created_at.desc())).all())
+    if not rows:
+        return "no alerts configured.\nadd one in the web ui at /alerts."
+    lines = ["alerts:"]
+    for a in rows:
+        flag = "✓" if a.enabled else "✗"
+        f = a.filter_json or {}
+        bits = [f"#{a.id} {flag} [{a.kind}] {a.name}"]
+        kvs = [f"{k}={v}" for k, v in f.items() if v not in (None, "", 0)]
+        if kvs:
+            bits.append(" / " + ", ".join(kvs))
+        bits.append(f" · fired {a.fired_count}")
+        lines.append("".join(bits))
+    return "\n".join(lines)
+
+
 async def _cmd_find(engine, key: str, value: str) -> str:
     key_l = key.lower()
     val_l = value.lower()
@@ -192,6 +251,28 @@ async def handle_command(text: str) -> None:
         key = args[0]
         value = " ".join(args[1:])
         await send_telegram_message(await _cmd_find(engine, key, value))
+        return
+
+    if cmd == "/diff":
+        if len(args) < 1:
+            await send_telegram_message("usage: /diff <instance_id> [n]")
+            return
+        try:
+            iid = int(args[0])
+        except ValueError:
+            await send_telegram_message("instance id must be a number")
+            return
+        n = 10
+        if len(args) >= 2:
+            try:
+                n = max(1, min(50, int(args[1])))
+            except ValueError:
+                pass
+        await send_telegram_message(await _cmd_diff(engine, iid, n))
+        return
+
+    if cmd == "/alerts":
+        await send_telegram_message(await _cmd_alerts(engine))
         return
 
     if cmd == "/scan":

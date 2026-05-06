@@ -14,12 +14,14 @@ from sqlmodel import Session, select
 
 from .config import settings
 from .db import get_session, init_db
-from .models import Instance, InstanceChange, InstanceCheck, ScanRun, Service
+from .models import Alert, Instance, InstanceChange, InstanceCheck, ScanRun, Service
 from .models_summary import model_names
 from .recheck import run_recheck
 from .scanner import run_shodan_scan
 from .scheduler import shutdown_scheduler, start_scheduler
 from .security import require_admin
+
+from pydantic import BaseModel
 
 
 app = FastAPI(title="openports")
@@ -46,7 +48,7 @@ async def _telegram_handler(text_in: str) -> None:
     cmd = parts[0].lower()
 
     # New + standard commands handled in commands.py
-    if cmd in {"/help", "/ping", "/status", "/top", "/find", "/scan", "/recheck"}:
+    if cmd in {"/help", "/ping", "/status", "/top", "/find", "/scan", "/recheck", "/diff", "/alerts"}:
         try:
             await cmds.handle_command(text_in)
             return
@@ -325,6 +327,62 @@ def instance_changes(
         .limit(limit)
     ).all()
     return rows
+
+
+class AlertIn(BaseModel):
+    name: str
+    kind: str  # new_instance | models_added | alive_changed
+    filter_json: dict | None = None
+    enabled: bool | None = True
+
+
+@app.get("/api/alerts")
+def list_alerts(session: Session = Depends(get_session)):
+    return session.exec(select(Alert).order_by(Alert.created_at.desc())).all()
+
+
+@app.post("/api/alerts", dependencies=[Depends(require_admin)])
+def create_alert(payload: AlertIn, session: Session = Depends(get_session)):
+    if payload.kind not in {"new_instance", "models_added", "alive_changed"}:
+        raise HTTPException(status_code=400, detail="kind must be new_instance|models_added|alive_changed")
+    a = Alert(
+        name=payload.name.strip() or "untitled",
+        kind=payload.kind,
+        filter_json=payload.filter_json or {},
+        enabled=bool(payload.enabled if payload.enabled is not None else True),
+    )
+    session.add(a)
+    session.commit()
+    session.refresh(a)
+    return a
+
+
+@app.patch("/api/alerts/{alert_id}", dependencies=[Depends(require_admin)])
+def update_alert(alert_id: int, payload: AlertIn, session: Session = Depends(get_session)):
+    a = session.get(Alert, alert_id)
+    if a is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    a.name = payload.name.strip() or a.name
+    if payload.kind in {"new_instance", "models_added", "alive_changed"}:
+        a.kind = payload.kind
+    if payload.filter_json is not None:
+        a.filter_json = payload.filter_json
+    if payload.enabled is not None:
+        a.enabled = bool(payload.enabled)
+    session.add(a)
+    session.commit()
+    session.refresh(a)
+    return a
+
+
+@app.delete("/api/alerts/{alert_id}", dependencies=[Depends(require_admin)])
+def delete_alert(alert_id: int, session: Session = Depends(get_session)):
+    a = session.get(Alert, alert_id)
+    if a is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    session.delete(a)
+    session.commit()
+    return {"status": "deleted"}
 
 
 @app.get("/api/models/catalog")
