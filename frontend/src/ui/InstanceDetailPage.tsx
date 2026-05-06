@@ -31,11 +31,17 @@ export default function InstanceDetailPage() {
         <div>Alive</div>
         <div>{item.is_alive ? 'yes' : 'no'}</div>
 
+        <div>Provider</div>
+        <div>{item.provider ?? '—'}</div>
+
+        <div>Reverse DNS</div>
+        <div style={{ wordBreak: 'break-all' }}>{item.reverse_dns ?? '—'}</div>
+
         <div>Version</div>
         <div>{item.version ?? '—'}</div>
 
         <div>GPU</div>
-        <div>{item.gpu_name ?? '— (Ollama typically does not expose GPU via HTTP API)'}</div>
+        <div>{item.gpu_name ?? '—'}</div>
 
         <div>Models</div>
         <div>{item.model_count ?? '—'}</div>

@@ -27,6 +27,10 @@ class Instance(SQLModel, table=True):
 
     is_alive: bool = Field(default=True, index=True)
 
+    # Hosting / provider classification
+    provider: str | None = Field(default=None, index=True)
+    reverse_dns: str | None = Field(default=None)
+
     # Raw data
     shodan: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
     service_metadata: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))

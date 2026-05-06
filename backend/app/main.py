@@ -151,6 +151,7 @@ def list_instances(
     session: Session = Depends(get_session),
     service: Service | None = None,
     alive: bool | None = None,
+    provider: str | None = None,
     limit: int = Query(default=200, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
 ):
@@ -164,6 +165,16 @@ def list_instances(
         stmt = stmt.where(Instance.service == service)
     if alive is not None:
         stmt = stmt.where(Instance.is_alive == alive)
+    if provider:
+        if provider == "vps":
+            # "vps" means "any known cloud provider" (not residential, not unknown)
+            stmt = stmt.where(Instance.provider.notin_(["residential", "unknown", None]))
+        elif provider == "residential":
+            stmt = stmt.where(Instance.provider == "residential")
+        elif provider == "unknown":
+            stmt = stmt.where(Instance.provider.is_(None))
+        else:
+            stmt = stmt.where(Instance.provider == provider)
     return session.exec(stmt).all()
 
 

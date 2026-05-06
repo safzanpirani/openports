@@ -8,6 +8,7 @@ import httpx
 from sqlmodel import Session, select
 
 from .config import settings
+from .enrich_hosting import classify_provider, enrich_ip_hosting
 from .fingerprints import verify_comfyui, verify_ollama
 from .models import Instance, ScanRun, Service
 from .shodan_client import candidates_for_ports
@@ -115,6 +116,13 @@ def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok:
         inst.service_metadata = meta
     if models is not None:
         inst.models = models
+
+    # Provider enrichment from Shodan compact data + reverse DNS
+    if shodan_match and not inst.provider:
+        asn = shodan_match.get("asn")
+        org = shodan_match.get("org")
+        isp = shodan_match.get("isp")
+        inst.provider = classify_provider(asn=asn, shodan_org=org, shodan_isp=isp)
 
     if version:
         inst.version = version

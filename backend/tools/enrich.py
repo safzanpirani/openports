@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 
 from app.config import settings
+from app.enrich_hosting import enrich_ip_hosting
 
 
 def _safe_int(v: Any) -> int | None:
@@ -104,8 +105,17 @@ def _extract_ollama_model_summary(show: dict[str, Any] | None) -> dict[str, Any]
 
 async def enrich_ip(ip: str) -> dict[str, Any]:
     timeout = httpx.Timeout(settings.HTTP_TIMEOUT_SECONDS)
+
+    # Hosting enrichment (reverse DNS + provider classification)
+    hosting: dict[str, Any] = {}
+    try:
+        h = await enrich_ip_hosting(ip)
+        hosting = {k: v for k, v in h.items() if v}
+    except Exception:
+        pass
+
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        out: dict[str, Any] = {"ip": ip, "comfyui": None, "ollama": None}
+        out: dict[str, Any] = {"ip": ip, "hosting": hosting, "comfyui": None, "ollama": None}
 
         # --- ComfyUI ---
         comfy: dict[str, Any] = {}

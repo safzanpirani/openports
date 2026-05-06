@@ -20,6 +20,8 @@ export type Instance = {
   max_model_params?: number | null
   max_context?: number | null
   node_count?: number | null
+  provider?: string | null
+  reverse_dns?: string | null
   service_metadata?: any
   models?: any
   last_error?: string | null
@@ -37,8 +39,17 @@ export type ScanRun = {
   error?: string | null
 }
 
-export async function fetchInstances(): Promise<Instance[]> {
-  const r = await fetch('/api/instances')
+export async function fetchInstances(params?: {
+  service?: Service
+  provider?: string
+  alive?: boolean
+}): Promise<Instance[]> {
+  const search = new URLSearchParams()
+  if (params?.service) search.set('service', params.service)
+  if (params?.provider) search.set('provider', params.provider)
+  if (params?.alive !== undefined) search.set('alive', String(params.alive))
+  const qs = search.toString()
+  const r = await fetch('/api/instances' + (qs ? `?${qs}` : ''))
   if (!r.ok) throw new Error('Failed to load instances')
   return r.json()
 }
