@@ -306,6 +306,15 @@ export default function InstanceDetailPage() {
           <div className="k">asn</div>
           <div className="v mono">{asn ?? '—'}</div>
 
+          <div className="k">discovered via</div>
+          <div className="v">
+            {item.discovery_sources && item.discovery_sources.length > 0
+              ? item.discovery_sources.map((s) => (
+                  <span key={s} className="badge" style={{ marginRight: 4 }}>{s}</span>
+                ))
+              : '—'}
+          </div>
+
           {item.last_error && (
             <>
               <div className="k">last error</div>

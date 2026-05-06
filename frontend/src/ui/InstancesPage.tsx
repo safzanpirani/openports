@@ -11,6 +11,7 @@ import {
   fetchDistinct,
   fetchInstances,
   fetchStats,
+  triggerMultiScan,
   triggerRecheck,
   triggerShodanScan,
 } from './api'
@@ -433,6 +434,17 @@ export default function InstancesPage() {
     }
   }
 
+  async function onMultiScan() {
+    setScanMsg('multi-source scan scheduled…')
+    try {
+      await triggerMultiScan({}, adminToken() || undefined)
+      setScanMsg('multi-source scan scheduled.')
+      setTimeout(() => setScanMsg(null), 4000)
+    } catch (e) {
+      setScanMsg(String(e))
+    }
+  }
+
   async function onRecheck() {
     setScanMsg('rechecking stored instances…')
     try {
@@ -505,8 +517,11 @@ export default function InstancesPage() {
           <button onClick={onRecheck} title="re-fingerprint stored instances (skips fresh ones)">
             recheck
           </button>
-          <button onClick={onScan} title="trigger a new shodan scan">
-            run scan
+          <button onClick={onScan} title="shodan only">
+            shodan
+          </button>
+          <button onClick={onMultiScan} title="every configured source (shodan, censys, zoomeye)">
+            multi-scan
           </button>
           <button className="ghost icon" title="keyboard shortcuts [?]" onClick={() => setHelpOpen(true)}>
             ?
@@ -759,6 +774,15 @@ export default function InstancesPage() {
                   <td className="num">{fmtContext(it.max_context)}</td>
                   <td className="muted" title={it.last_seen_at}>
                     {fmtRelative(it.last_seen_at)}
+                    {it.discovery_sources && it.discovery_sources.length > 0 && (
+                      <div style={{ marginTop: 2 }}>
+                        {it.discovery_sources.map((s) => (
+                          <span key={s} className="badge" style={{ fontSize: 10, marginRight: 3 }} title={`source: ${s}`}>
+                            {s}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </td>
                   <td>
                     <div className="row" style={{ gap: 4 }}>

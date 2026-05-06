@@ -17,7 +17,7 @@ from .db import get_session, init_db
 from .models import Alert, Instance, InstanceChange, InstanceCheck, ScanRun, Service
 from .models_summary import model_names
 from .recheck import run_recheck
-from .scanner import run_shodan_scan
+from .scanner import run_multi_source_scan, run_shodan_scan
 from .scheduler import shutdown_scheduler, start_scheduler
 from .security import require_admin
 
@@ -638,6 +638,29 @@ async def trigger_shodan_scan(
 ):
     background.add_task(_run_shodan_scan_job, limit)
     return {"status": "scheduled"}
+
+
+def _run_multi_source_scan_job(sources_csv: str | None, limit: int | None) -> None:
+    from sqlmodel import Session as _Session
+
+    from .db import engine
+
+    with _Session(engine) as s:
+        srcs = (
+            [t.strip() for t in sources_csv.split(",") if t.strip()]
+            if sources_csv else None
+        )
+        asyncio.run(run_multi_source_scan(s, sources=srcs, limit=limit))
+
+
+@app.post("/api/scan/multi", dependencies=[Depends(require_admin)])
+async def trigger_multi_source_scan(
+    background: BackgroundTasks,
+    sources: str | None = Query(default=None, description="comma-separated subset, e.g. 'shodan,censys'"),
+    limit: int | None = Query(default=None, ge=1, le=10000),
+):
+    background.add_task(_run_multi_source_scan_job, sources, limit)
+    return {"status": "scheduled", "sources": sources or "all enabled"}
 
 
 def _run_recheck_job(only_stale: bool, only_alive: bool, limit: int | None) -> None:

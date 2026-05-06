@@ -94,7 +94,7 @@ async def _verify_one(
     raise RuntimeError("unsupported port")
 
 
-def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok: bool, meta, models, version, gpu_name, shodan_match, metrics: dict[str, Any]) -> tuple[Instance, bool]:
+def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok: bool, meta, models, version, gpu_name, shodan_match, metrics: dict[str, Any], discovery_source: str | None = None) -> tuple[Instance, bool]:
     stmt = select(Instance).where(Instance.service == service, Instance.ip == ip, Instance.port == port)
     inst = session.exec(stmt).first()
 
@@ -110,6 +110,12 @@ def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok:
     if not inst:
         inst = Instance(service=service, ip=ip, port=port)
         created = True
+
+    if discovery_source:
+        srcs = list(inst.discovery_sources or [])
+        if discovery_source not in srcs:
+            srcs.append(discovery_source)
+            inst.discovery_sources = srcs
 
     inst.last_checked_at = now
     inst.is_alive = bool(ok)
@@ -216,6 +222,120 @@ def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok:
     return inst, created
 
 
+async def run_multi_source_scan(
+    session: Session,
+    *,
+    sources: list[str] | None = None,
+    limit: int | None = None,
+) -> ScanRun:
+    """Pull candidates from every configured source, dedupe, fingerprint, upsert.
+
+    Sources without credentials are silently skipped. `sources=None` means
+    "all enabled". Pass `["shodan"]` etc. to limit to a subset.
+    """
+    from . import censys_client, zoomeye_client
+
+    limit = limit or settings.SHODAN_LIMIT
+    chosen = sources or ["shodan", "censys", "zoomeye"]
+
+    queried = ", ".join(chosen)
+    run = ScanRun(source=f"multi:{queried}", query="port:8188 OR port:11434", started_at=datetime.utcnow())
+    session.add(run)
+    session.commit()
+    session.refresh(run)
+
+    try:
+        # Each source returns compact-shape dicts with `_source` set.
+        gathered: list[dict[str, Any]] = []
+        if "shodan" in chosen and settings.SHODAN_API_KEY:
+            try:
+                for m in candidates_for_ports(limit=limit):
+                    if isinstance(m, dict):
+                        m.setdefault("_source", "shodan")
+                        gathered.append(m)
+            except Exception:
+                pass
+        if "censys" in chosen and censys_client._enabled():
+            gathered.extend(censys_client.candidates_for_ports(limit=limit))
+        if "zoomeye" in chosen and zoomeye_client._enabled():
+            gathered.extend(zoomeye_client.candidates_for_ports(limit=limit))
+
+        # Dedupe by (ip, port) — keep the first (richest) record but union sources.
+        by_target: dict[tuple[str, int], dict[str, Any]] = {}
+        sources_per_target: dict[tuple[str, int], list[str]] = {}
+        for m in gathered:
+            ip = m.get("ip_str")
+            port = m.get("port")
+            if not ip or not isinstance(port, int):
+                continue
+            key = (ip, port)
+            src = m.get("_source") or "unknown"
+            sources_per_target.setdefault(key, [])
+            if src not in sources_per_target[key]:
+                sources_per_target[key].append(src)
+            by_target.setdefault(key, m)
+
+        run.candidates = len(by_target)
+        session.add(run)
+        session.commit()
+
+        sem = asyncio.Semaphore(settings.VERIFY_CONCURRENCY)
+        tasks = []
+        for (ip, port), m in by_target.items():
+            service = _service_from_port(port)
+            if not service:
+                continue
+            tasks.append(_verify_one(sem, ip, port, m))
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        verified = 0
+        new_instances = 0
+        for r in results:
+            if isinstance(r, Exception):
+                continue
+            service, ip, port, ok, meta, models_v, version, gpu_name, shodan_compact, metrics = r
+            if ok:
+                verified += 1
+            sources = sources_per_target.get((ip, port), [])
+            primary_source = sources[0] if sources else "shodan"
+            inst, created = _upsert_instance(
+                session, service, ip, port, ok, meta, models_v, version, gpu_name,
+                shodan_match=shodan_compact, metrics=metrics, discovery_source=primary_source,
+            )
+            # Add any additional sources beyond the primary one.
+            if len(sources) > 1:
+                existing = list(inst.discovery_sources or [])
+                changed = False
+                for s in sources:
+                    if s not in existing:
+                        existing.append(s)
+                        changed = True
+                if changed:
+                    inst.discovery_sources = existing
+                    session.add(inst)
+                    session.commit()
+            if created and ok:
+                new_instances += 1
+                await send_telegram_message(
+                    f"new {service.value}: {ip}:{port}\nversion={version or 'unknown'} gpu={gpu_name or 'unknown'} via {','.join(sources) or 'shodan'}"
+                )
+
+        run.verified = verified
+        run.new_instances = new_instances
+        run.finished_at = datetime.utcnow()
+        session.add(run)
+        session.commit()
+        session.refresh(run)
+        return run
+    except Exception as e:
+        run.error = str(e)
+        run.finished_at = datetime.utcnow()
+        session.add(run)
+        session.commit()
+        session.refresh(run)
+        return run
+
+
 async def run_shodan_scan(session: Session, limit: int | None = None) -> ScanRun:
     limit = limit or settings.SHODAN_LIMIT
 
@@ -258,7 +378,10 @@ async def run_shodan_scan(session: Session, limit: int | None = None) -> ScanRun
             service, ip, port, ok, meta, models, version, gpu_name, shodan_compact, metrics = r
             if ok:
                 verified += 1
-            inst, created = _upsert_instance(session, service, ip, port, ok, meta, models, version, gpu_name, shodan_match=shodan_compact, metrics=metrics)
+            inst, created = _upsert_instance(
+                session, service, ip, port, ok, meta, models, version, gpu_name,
+                shodan_match=shodan_compact, metrics=metrics, discovery_source="shodan",
+            )
 
             if created and ok:
                 new_instances += 1

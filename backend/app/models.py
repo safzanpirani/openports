@@ -51,6 +51,12 @@ class Instance(SQLModel, table=True):
 
     last_error: str | None = Field(default=None)
 
+    # Discovery provenance: which external indexes have surfaced this (ip, port)
+    # at any point. Stored as a JSON array of source names, e.g.
+    # ["shodan", "censys", "zoomeye", "import"].
+    discovery_sources: list[str] | None = Field(default=None, sa_column=Column(JSON))
+
+
 class ScanRun(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
 

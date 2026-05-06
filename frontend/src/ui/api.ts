@@ -26,6 +26,7 @@ export type Instance = {
   service_metadata?: any
   models?: any
   last_error?: string | null
+  discovery_sources?: string[] | null
 }
 
 export type ScanRun = {
@@ -254,6 +255,21 @@ export async function triggerShodanScan(adminToken?: string): Promise<void> {
     headers: adminHeaders(adminToken),
   })
   if (!r.ok) throw new Error(`scan trigger failed: ${await r.text()}`)
+}
+
+export async function triggerMultiScan(
+  opts: { sources?: string; limit?: number } = {},
+  adminToken?: string,
+): Promise<void> {
+  const s = new URLSearchParams()
+  if (opts.sources) s.set('sources', opts.sources)
+  if (opts.limit) s.set('limit', String(opts.limit))
+  const qs = s.toString()
+  const r = await fetch('/api/scan/multi' + (qs ? `?${qs}` : ''), {
+    method: 'POST',
+    headers: adminHeaders(adminToken),
+  })
+  if (!r.ok) throw new Error(`multi-source scan trigger failed: ${await r.text()}`)
 }
 
 export async function triggerRecheck(

@@ -45,6 +45,40 @@ def init_db() -> None:
     from . import models as _models  # noqa: F401
 
     SQLModel.metadata.create_all(engine)
+    _apply_lightweight_migrations()
+
+
+def _apply_lightweight_migrations() -> None:
+    """Add columns added after the table was first created.
+
+    SQLAlchemy's `create_all` only creates missing tables; it doesn't ALTER
+    existing ones. We do explicit additive migrations here for SQLite to
+    avoid pulling in alembic for a single-table app.
+    """
+    from sqlalchemy import inspect, text
+
+    # Each entry: (table, column, ddl-fragment)
+    migrations: list[tuple[str, str, str]] = [
+        ("instance", "discovery_sources", "ALTER TABLE instance ADD COLUMN discovery_sources JSON"),
+    ]
+
+    insp = inspect(engine)
+    if "instance" not in insp.get_table_names():
+        return
+
+    existing = {c["name"] for c in insp.get_columns("instance")}
+    with engine.begin() as conn:
+        for table, col, ddl in migrations:
+            if table != "instance":
+                continue
+            if col in existing:
+                continue
+            try:
+                conn.execute(text(ddl))
+                existing.add(col)
+            except Exception:
+                # Column probably already exists or sqlite is unhappy; skip silently.
+                pass
 
 
 def get_session() -> Session:
