@@ -41,6 +41,9 @@ engine = create_engine(
 
 def init_db() -> None:
     ensure_data_dir()
+    # Import models so they register with SQLModel.metadata
+    from . import models as _models  # noqa: F401
+
     SQLModel.metadata.create_all(engine)
 
 
