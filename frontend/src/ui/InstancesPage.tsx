@@ -146,13 +146,18 @@ function writeToParams(state: FilterState): URLSearchParams {
 
 type Saved = { name: string; search: string }
 
-function StatsBar({ stats }: { stats: Stats | null }) {
+function StatsBar({ stats, onServiceClick }: { stats: Stats | null; onServiceClick: (svc: Service | '') => void }) {
   if (!stats) return null
   const sched = stats.scheduler
   const schedLine =
     sched && (sched.scan_interval_minutes > 0 || sched.recheck_interval_minutes > 0)
       ? `cron: scan/${sched.scan_interval_minutes || '–'}m · recheck/${sched.recheck_interval_minutes || '–'}m`
       : 'cron: off'
+
+  const services = Object.entries(stats.by_service)
+    .filter(([, v]) => v.total > 0)
+    .sort((a, b) => b[1].total - a[1].total)
+
   return (
     <div className="stats-grid">
       <div className="card stat">
@@ -160,15 +165,22 @@ function StatsBar({ stats }: { stats: Stats | null }) {
         <div className="value">{fmtNumber(stats.total)}</div>
         <div className="sub">{fmtNumber(stats.alive)} alive</div>
       </div>
-      <div className="card stat">
-        <div className="label">comfyui</div>
-        <div className="value">{fmtNumber(stats.by_service.comfyui?.total ?? 0)}</div>
-        <div className="sub">{fmtNumber(stats.by_service.comfyui?.alive ?? 0)} alive</div>
-      </div>
-      <div className="card stat">
-        <div className="label">ollama</div>
-        <div className="value">{fmtNumber(stats.by_service.ollama?.total ?? 0)}</div>
-        <div className="sub">{fmtNumber(stats.by_service.ollama?.alive ?? 0)} alive</div>
+      <div className="card stat" style={{ minWidth: 220 }} title="click a service to filter">
+        <div className="label">by service</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 2 }}>
+          {services.length === 0 && <span className="muted">none yet</span>}
+          {services.map(([svc, v]) => (
+            <span
+              key={svc}
+              className={`badge svc-${svc}`}
+              onClick={() => onServiceClick(svc as Service)}
+              style={{ cursor: 'pointer' }}
+              title={`${v.alive} alive of ${v.total}`}
+            >
+              {svc} {v.total}
+            </span>
+          ))}
+        </div>
       </div>
       <div className="card stat">
         <div className="label">new (24h / 7d)</div>
@@ -469,20 +481,24 @@ export default function InstancesPage() {
 
   return (
     <div>
-      <StatsBar stats={stats} />
+      <StatsBar stats={stats} onServiceClick={(s) => setFilters({ service: s })} />
 
       <div className="toolbar">
-        <div className="group" role="tablist" aria-label="service">
-          <button className={filters.service === '' ? 'active' : ''} onClick={() => setFilters({ service: '' })}>
-            all
-          </button>
-          <button className={filters.service === 'comfyui' ? 'active' : ''} onClick={() => setFilters({ service: 'comfyui' })}>
-            comfyui
-          </button>
-          <button className={filters.service === 'ollama' ? 'active' : ''} onClick={() => setFilters({ service: 'ollama' })}>
-            ollama
-          </button>
-        </div>
+        <select
+          value={filters.service}
+          onChange={(e) => setFilters({ service: e.target.value as Service | '' })}
+          title="service filter"
+        >
+          <option value="">all services</option>
+          {(['comfyui', 'ollama', 'sdwebui', 'openwebui', 'jupyter'] as Service[]).map((svc) => {
+            const c = stats?.by_service[svc]
+            return (
+              <option key={svc} value={svc}>
+                {svc}{c ? ` (${c.total})` : ''}
+              </option>
+            )
+          })}
+        </select>
 
         <input
           ref={searchRef}

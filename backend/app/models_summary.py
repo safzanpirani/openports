@@ -38,6 +38,35 @@ def model_names(service: Service | str, models: dict[str, Any] | None) -> list[s
                         out.append(f"{folder}/{item}")
         return sorted(set(out))
 
+    if svc == "sdwebui":
+        out = []
+        sd = models.get("sd_models")
+        if isinstance(sd, list):
+            for item in sd:
+                if isinstance(item, dict):
+                    name = item.get("title") or item.get("model_name") or item.get("filename")
+                    if isinstance(name, str):
+                        out.append(f"checkpoints/{name}")
+        loras = models.get("loras")
+        if isinstance(loras, list):
+            for item in loras:
+                if isinstance(item, dict):
+                    name = item.get("name") or item.get("alias")
+                    if isinstance(name, str):
+                        out.append(f"loras/{name}")
+        return sorted(set(out))
+
+    if svc == "openwebui":
+        out = []
+        data = models.get("data")
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    name = item.get("id") or item.get("name")
+                    if isinstance(name, str):
+                        out.append(name)
+        return sorted(set(out))
+
     return []
 
 

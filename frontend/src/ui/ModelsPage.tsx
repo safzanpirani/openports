@@ -74,26 +74,15 @@ export default function ModelsPage() {
       </div>
 
       <div className="toolbar">
-        <div className="group">
-          <button
-            className={service === '' ? 'active' : ''}
-            onClick={() => setQp({ service: null })}
-          >
-            all
-          </button>
-          <button
-            className={service === 'comfyui' ? 'active' : ''}
-            onClick={() => setQp({ service: 'comfyui' })}
-          >
-            comfyui
-          </button>
-          <button
-            className={service === 'ollama' ? 'active' : ''}
-            onClick={() => setQp({ service: 'ollama' })}
-          >
-            ollama
-          </button>
-        </div>
+        <select
+          value={service || ''}
+          onChange={(e) => setQp({ service: e.target.value || null })}
+        >
+          <option value="">all services</option>
+          {(['comfyui', 'ollama', 'sdwebui', 'openwebui', 'jupyter'] as Service[]).map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
 
         <input
           className="search"

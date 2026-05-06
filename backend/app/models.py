@@ -12,6 +12,9 @@ from sqlmodel import Field, SQLModel
 class Service(str, Enum):
     comfyui = "comfyui"
     ollama = "ollama"
+    sdwebui = "sdwebui"
+    openwebui = "openwebui"
+    jupyter = "jupyter"
 
 
 class Instance(SQLModel, table=True):

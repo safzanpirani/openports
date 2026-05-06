@@ -92,11 +92,14 @@ def _search(query: str, port: int, per_page: int) -> list[dict[str, Any]]:
     return out
 
 
+SUPPORTED_PORTS = (8188, 11434, 7860, 3000, 8888)
+
+
 def candidates_for_ports(limit: int) -> list[dict[str, Any]]:
     """Return Censys candidates for the ports we care about."""
     if not _enabled():
         return []
     out: list[dict[str, Any]] = []
-    for port in (8188, 11434):
+    for port in SUPPORTED_PORTS:
         out.extend(_search(f"services.port: {port}", port=port, per_page=limit))
     return out

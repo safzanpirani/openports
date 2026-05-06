@@ -16,13 +16,16 @@ def shodan_search(query: str, limit: int) -> list[dict[str, Any]]:
     return list(res.get("matches", []))
 
 
-def candidates_for_ports(limit: int) -> list[dict[str, Any]]:
+SUPPORTED_PORTS = (8188, 11434, 7860, 3000, 8888)
+
+
+def candidates_for_ports(limit: int, ports: tuple[int, ...] = SUPPORTED_PORTS) -> list[dict[str, Any]]:
     """Return raw Shodan matches for the ports we care about."""
 
     matches: list[dict[str, Any]] = []
 
     # Keep the queries simple; we verify ourselves.
-    for q in ("port:8188", "port:11434"):
-        matches.extend(shodan_search(q, limit=limit))
+    for port in ports:
+        matches.extend(shodan_search(f"port:{port}", limit=limit))
 
     return matches

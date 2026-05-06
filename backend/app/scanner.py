@@ -10,7 +10,7 @@ from sqlmodel import Session, select
 from .alerts import evaluate_alerts
 from .config import settings
 from .enrich_hosting import classify_provider, enrich_ip_hosting
-from .fingerprints import verify_comfyui, verify_ollama
+from .fingerprints import verify_comfyui, verify_jupyter, verify_ollama, verify_openwebui, verify_sdwebui
 from .models import Instance, InstanceChange, InstanceCheck, ScanRun, Service
 from .models_summary import diff_names, model_names
 from .shodan_client import candidates_for_ports
@@ -22,6 +22,12 @@ def _service_from_port(port: int) -> Service | None:
         return Service.comfyui
     if port == 11434:
         return Service.ollama
+    if port == 7860:
+        return Service.sdwebui
+    if port == 3000:
+        return Service.openwebui
+    if port == 8888:
+        return Service.jupyter
     return None
 
 
@@ -89,6 +95,15 @@ async def _verify_one(
             if port == 11434:
                 ok, meta, models, version, metrics = await verify_ollama(base_url, client)
                 return Service.ollama, ip, port, ok, meta, models, version, None, shodan_compact, metrics
+            if port == 7860:
+                ok, meta, models, version, gpu_name, metrics = await verify_sdwebui(base_url, client)
+                return Service.sdwebui, ip, port, ok, meta, models, version, gpu_name, shodan_compact, metrics
+            if port == 3000:
+                ok, meta, models, version, metrics = await verify_openwebui(base_url, client)
+                return Service.openwebui, ip, port, ok, meta, models, version, None, shodan_compact, metrics
+            if port == 8888:
+                ok, meta, models, version, metrics = await verify_jupyter(base_url, client)
+                return Service.jupyter, ip, port, ok, meta, models, version, None, shodan_compact, metrics
 
     # unreachable
     raise RuntimeError("unsupported port")

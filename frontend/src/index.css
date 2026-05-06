@@ -439,6 +439,21 @@ table.data td.num {
   color: #1d4f8a;
   border-color: transparent;
 }
+.badge.svc-sdwebui {
+  background: #ffe8d6;
+  color: #b65a13;
+  border-color: transparent;
+}
+.badge.svc-openwebui {
+  background: #e1f6e7;
+  color: #1d6635;
+  border-color: transparent;
+}
+.badge.svc-jupyter {
+  background: #fff1c9;
+  color: #8a5a00;
+  border-color: transparent;
+}
 :root.dark .badge.svc-comfyui {
   background: #2a1c4a;
   color: #c4adff;
@@ -446,6 +461,18 @@ table.data td.num {
 :root.dark .badge.svc-ollama {
   background: #102943;
   color: #99c5f2;
+}
+:root.dark .badge.svc-sdwebui {
+  background: #3a2210;
+  color: #f7c19a;
+}
+:root.dark .badge.svc-openwebui {
+  background: #122a18;
+  color: #92d8a8;
+}
+:root.dark .badge.svc-jupyter {
+  background: #2e2410;
+  color: #ecd082;
 }
 
 .kv {

@@ -153,6 +153,228 @@ async def verify_comfyui(base_url: str, client: httpx.AsyncClient) -> tuple[bool
     return ok, metadata, models, version, gpu_name, metrics
 
 
+async def verify_sdwebui(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, str | None, dict[str, Any]]:
+    """Verify a Stable Diffusion WebUI / A1111 / Forge / Vladmandic instance on :7860.
+
+    Returns (ok, metadata, models, version, gpu_name, metrics).
+    Distinguishes from ComfyUI (also gradio/7860 sometimes) by hitting the
+    A1111-only `/sdapi/v1/options` and `/sdapi/v1/sd-models` endpoints.
+    """
+
+    metadata: dict[str, Any] | None = None
+    models: dict[str, Any] | None = None
+    version: str | None = None
+    gpu_name: str | None = None
+
+    try:
+        r = await client.get(f"{base_url}/sdapi/v1/options")
+        if r.status_code == 200:
+            metadata = r.json()
+            if isinstance(metadata, dict):
+                # A1111 returns commit/version under various keys depending on fork
+                for k in ("sd_version", "sd_checkpoint_hash", "version"):
+                    if isinstance(metadata.get(k), str):
+                        version = metadata[k]
+                        break
+    except Exception:
+        pass
+
+    models_out: dict[str, Any] = {}
+    try:
+        r = await client.get(f"{base_url}/sdapi/v1/sd-models")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list):
+                models_out["sd_models"] = data
+    except Exception:
+        pass
+    try:
+        r = await client.get(f"{base_url}/sdapi/v1/loras")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list):
+                models_out["loras"] = data
+    except Exception:
+        pass
+
+    if models_out:
+        models = models_out
+
+    ok = metadata is not None or bool(models_out)
+    if not ok:
+        # Best-effort homepage signature so we still mark "exposed gradio" style hosts.
+        try:
+            r = await client.get(f"{base_url}/", timeout=settings.HTTP_TIMEOUT_SECONDS)
+            if r.status_code == 200:
+                t = (r.text or "").lower()
+                if "stable diffusion" in t or "automatic1111" in t or "stable-diffusion-webui" in t:
+                    ok = True
+        except Exception:
+            pass
+
+    model_count = 0
+    if isinstance(models, dict):
+        for v in models.values():
+            if isinstance(v, list):
+                model_count += len(v)
+
+    metrics = {
+        "vram_total_gb": None,
+        "vram_free_gb": None,
+        "ram_total_gb": None,
+        "ram_free_gb": None,
+        "model_count": model_count if model_count > 0 else None,
+        "node_count": None,
+        "max_model_params": None,
+        "max_context": None,
+    }
+    return ok, metadata, models, version, gpu_name, metrics
+
+
+async def verify_openwebui(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
+    """Verify an Open WebUI instance on :3000 (or wherever).
+
+    Returns (ok, metadata, models, version, metrics). Distinguishes from
+    other apps via Open WebUI's `/api/config` and `/api/version` endpoints.
+    """
+
+    metadata: dict[str, Any] | None = None
+    models: dict[str, Any] | None = None
+    version: str | None = None
+
+    try:
+        r = await client.get(f"{base_url}/api/config")
+        if r.status_code == 200:
+            metadata = r.json()
+            if isinstance(metadata, dict) and isinstance(metadata.get("version"), str):
+                version = metadata["version"]
+    except Exception:
+        pass
+
+    try:
+        r = await client.get(f"{base_url}/api/version")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict) and isinstance(data.get("version"), str) and not version:
+                version = data["version"]
+    except Exception:
+        pass
+
+    models_out: dict[str, Any] = {}
+    try:
+        r = await client.get(f"{base_url}/api/models")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict) and isinstance(data.get("data"), list):
+                models_out["data"] = data["data"]
+            elif isinstance(data, list):
+                models_out["data"] = data
+    except Exception:
+        pass
+
+    if models_out:
+        models = models_out
+
+    ok = metadata is not None
+    if not ok:
+        try:
+            r = await client.get(f"{base_url}/")
+            if r.status_code == 200:
+                t = (r.text or "").lower()
+                if "open webui" in t or "openwebui" in t:
+                    ok = True
+        except Exception:
+            pass
+
+    model_count = None
+    if isinstance(models, dict) and isinstance(models.get("data"), list):
+        model_count = len(models["data"])
+
+    metrics = {
+        "vram_total_gb": None,
+        "vram_free_gb": None,
+        "ram_total_gb": None,
+        "ram_free_gb": None,
+        "model_count": model_count,
+        "node_count": None,
+        "max_model_params": None,
+        "max_context": None,
+    }
+    return ok, metadata, models, version, metrics
+
+
+async def verify_jupyter(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
+    """Verify a Jupyter instance on :8888.
+
+    Returns (ok, metadata, models, version, metrics). `models` reused for
+    kernel/notebook listing if accessible. Most exposed Jupyter instances
+    require a token, so we treat any "Jupyter Notebook" / "JupyterLab"
+    signature as a positive ID even when listings are gated.
+    """
+
+    metadata: dict[str, Any] | None = None
+    models: dict[str, Any] | None = None
+    version: str | None = None
+
+    try:
+        r = await client.get(f"{base_url}/api")
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, dict) and isinstance(data.get("version"), str):
+                metadata = data
+                version = data["version"]
+    except Exception:
+        pass
+
+    listing: dict[str, Any] = {}
+    try:
+        r = await client.get(f"{base_url}/api/kernels")
+        if r.status_code == 200:
+            kernels = r.json()
+            if isinstance(kernels, list):
+                listing["kernels"] = kernels
+    except Exception:
+        pass
+    try:
+        r = await client.get(f"{base_url}/api/contents")
+        if r.status_code == 200:
+            contents = r.json()
+            if isinstance(contents, dict) and isinstance(contents.get("content"), list):
+                listing["root_contents_count"] = len(contents["content"])
+    except Exception:
+        pass
+
+    if listing:
+        models = listing
+
+    ok = metadata is not None
+    if not ok:
+        try:
+            r = await client.get(f"{base_url}/")
+            if r.status_code in (200, 302):
+                t = (r.text or "").lower()
+                if "jupyter" in t:
+                    ok = True
+                    if "jupyterlab" in t:
+                        metadata = {"product": "jupyterlab"}
+                    else:
+                        metadata = {"product": "jupyter"}
+        except Exception:
+            pass
+
+    metrics = {
+        "vram_total_gb": None,
+        "vram_free_gb": None,
+        "ram_total_gb": None,
+        "ram_free_gb": None,
+        "model_count": None,
+        "node_count": None,
+        "max_model_params": None,
+        "max_context": None,
+    }
+    return ok, metadata, models, version, metrics
+
+
 async def verify_ollama(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
     """Returns (ok, metadata, models, version, metrics).
     

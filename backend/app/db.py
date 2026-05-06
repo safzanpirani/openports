@@ -49,36 +49,40 @@ def init_db() -> None:
 
 
 def _apply_lightweight_migrations() -> None:
-    """Add columns added after the table was first created.
+    """Add columns SQLModel knows about that SQLite doesn't have yet.
 
     SQLAlchemy's `create_all` only creates missing tables; it doesn't ALTER
-    existing ones. We do explicit additive migrations here for SQLite to
-    avoid pulling in alembic for a single-table app.
+    existing ones. We diff the live schema against `SQLModel.metadata` and
+    issue `ALTER TABLE … ADD COLUMN` for any newcomers. SQLite-specific.
     """
+    import logging
     from sqlalchemy import inspect, text
+    from sqlmodel import SQLModel
 
-    # Each entry: (table, column, ddl-fragment)
-    migrations: list[tuple[str, str, str]] = [
-        ("instance", "discovery_sources", "ALTER TABLE instance ADD COLUMN discovery_sources JSON"),
-    ]
-
+    log = logging.getLogger("openports.migrate")
     insp = inspect(engine)
-    if "instance" not in insp.get_table_names():
-        return
+    live_tables = set(insp.get_table_names())
 
-    existing = {c["name"] for c in insp.get_columns("instance")}
     with engine.begin() as conn:
-        for table, col, ddl in migrations:
-            if table != "instance":
+        for table_name, table in SQLModel.metadata.tables.items():
+            if table_name not in live_tables:
+                # `create_all` will (or did) create it; nothing to migrate.
                 continue
-            if col in existing:
-                continue
-            try:
-                conn.execute(text(ddl))
-                existing.add(col)
-            except Exception:
-                # Column probably already exists or sqlite is unhappy; skip silently.
-                pass
+            existing = {c["name"] for c in insp.get_columns(table_name)}
+            for col in table.columns:
+                if col.name in existing:
+                    continue
+                # Best-effort SQLite-friendly type rendering.
+                try:
+                    col_type = col.type.compile(dialect=engine.dialect)
+                except Exception:
+                    col_type = "JSON"
+                ddl = f'ALTER TABLE "{table_name}" ADD COLUMN "{col.name}" {col_type}'
+                try:
+                    conn.execute(text(ddl))
+                    log.info("migrated: added %s.%s", table_name, col.name)
+                except Exception as e:
+                    log.warning("migrate %s.%s failed: %s", table_name, col.name, e)
 
 
 def get_session() -> Session:

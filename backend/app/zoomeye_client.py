@@ -76,13 +76,16 @@ def _search(query: str, port: int, page: int = 1) -> list[dict[str, Any]]:
     return out
 
 
+SUPPORTED_PORTS = (8188, 11434, 7860, 3000, 8888)
+
+
 def candidates_for_ports(limit: int) -> list[dict[str, Any]]:
     if not _enabled():
         return []
     # ZoomEye paginates with ~20 per page; pull a couple of pages if needed.
     pages = max(1, min(5, (limit + 19) // 20))
     out: list[dict[str, Any]] = []
-    for port in (8188, 11434):
+    for port in SUPPORTED_PORTS:
         for p in range(1, pages + 1):
             out.extend(_search(f"port:{port}", port=port, page=p))
     return out
