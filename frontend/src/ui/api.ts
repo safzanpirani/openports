@@ -66,6 +66,7 @@ export type InstanceQuery = {
   gpu?: string
   country?: string
   since_hours?: number
+  stale_hours?: number
   min_vram?: number
   sort_by?: string
   sort_dir?: 'asc' | 'desc'

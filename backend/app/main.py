@@ -172,6 +172,7 @@ def _build_filtered_query(
     gpu: str | None,
     country: str | None,
     since_hours: int | None,
+    stale_hours: int | None = None,
     min_vram: float | None,
     sort_by: str | None,
     sort_dir: str | None,
@@ -219,6 +220,9 @@ def _build_filtered_query(
     if since_hours is not None and since_hours > 0:
         cutoff = datetime.utcnow() - timedelta(hours=since_hours)
         stmt = stmt.where(Instance.last_seen_at >= cutoff)
+    if stale_hours is not None and stale_hours > 0:
+        cutoff = datetime.utcnow() - timedelta(hours=stale_hours)
+        stmt = stmt.where(Instance.last_checked_at < cutoff)
     if min_vram is not None and min_vram > 0:
         stmt = stmt.where(Instance.vram_total_gb >= min_vram)
 
@@ -242,12 +246,13 @@ def count_instances(
     gpu: str | None = None,
     country: str | None = None,
     since_hours: int | None = Query(default=None, ge=1, le=24 * 365),
+    stale_hours: int | None = Query(default=None, ge=1, le=24 * 365),
     min_vram: float | None = Query(default=None, ge=0),
 ):
     stmt = _build_filtered_query(
         service=service, alive=alive, provider=provider, q=q, model=model,
-        gpu=gpu, country=country, since_hours=since_hours, min_vram=min_vram,
-        sort_by=None, sort_dir=None,
+        gpu=gpu, country=country, since_hours=since_hours, stale_hours=stale_hours,
+        min_vram=min_vram, sort_by=None, sort_dir=None,
     )
     count_stmt = select(func.count()).select_from(stmt.subquery())
     n = session.exec(count_stmt).one()
@@ -267,6 +272,7 @@ def list_instances(
     gpu: str | None = None,
     country: str | None = None,
     since_hours: int | None = Query(default=None, ge=1, le=24 * 365),
+    stale_hours: int | None = Query(default=None, ge=1, le=24 * 365),
     min_vram: float | None = Query(default=None, ge=0),
     sort_by: str | None = Query(default=None),
     sort_dir: str | None = Query(default=None, pattern="^(asc|desc)$"),
@@ -275,8 +281,8 @@ def list_instances(
 ):
     stmt = _build_filtered_query(
         service=service, alive=alive, provider=provider, q=q, model=model,
-        gpu=gpu, country=country, since_hours=since_hours, min_vram=min_vram,
-        sort_by=sort_by, sort_dir=sort_dir,
+        gpu=gpu, country=country, since_hours=since_hours, stale_hours=stale_hours,
+        min_vram=min_vram, sort_by=sort_by, sort_dir=sort_dir,
     )
     stmt = stmt.offset(offset).limit(limit)
     return session.exec(stmt).all()
@@ -435,14 +441,15 @@ def export_csv(
     gpu: str | None = None,
     country: str | None = None,
     since_hours: int | None = Query(default=None, ge=1, le=24 * 365),
+    stale_hours: int | None = Query(default=None, ge=1, le=24 * 365),
     min_vram: float | None = Query(default=None, ge=0),
     sort_by: str | None = None,
     sort_dir: str | None = Query(default=None, pattern="^(asc|desc)$"),
 ):
     stmt = _build_filtered_query(
         service=service, alive=alive, provider=provider, q=q, model=model,
-        gpu=gpu, country=country, since_hours=since_hours, min_vram=min_vram,
-        sort_by=sort_by, sort_dir=sort_dir,
+        gpu=gpu, country=country, since_hours=since_hours, stale_hours=stale_hours,
+        min_vram=min_vram, sort_by=sort_by, sort_dir=sort_dir,
     )
     rows = session.exec(stmt).all()
 

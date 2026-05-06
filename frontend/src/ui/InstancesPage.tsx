@@ -48,6 +48,23 @@ function useDebounce<T>(value: T, ms = 250): T {
   return v
 }
 
+function useLocalStorage<T>(key: string, initial: T): [T, (v: T | ((p: T) => T)) => void] {
+  const [v, setV] = useState<T>(() => {
+    try {
+      const raw = localStorage.getItem(key)
+      return raw ? (JSON.parse(raw) as T) : initial
+    } catch {
+      return initial
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem(key, JSON.stringify(v))
+    } catch {}
+  }, [key, v])
+  return [v, setV]
+}
+
 type FilterState = {
   service: Service | ''
   q: string
@@ -57,6 +74,8 @@ type FilterState = {
   country: string
   aliveOnly: boolean
   recent24: boolean
+  staleOnly: boolean
+  starredOnly: boolean
   minVram: string
   sortBy: SortKey
   sortDir: 'asc' | 'desc'
@@ -73,6 +92,8 @@ const DEFAULT_FILTERS: FilterState = {
   country: '',
   aliveOnly: true,
   recent24: false,
+  staleOnly: false,
+  starredOnly: false,
   minVram: '',
   sortBy: 'last_seen_at',
   sortDir: 'desc',
@@ -92,6 +113,8 @@ function readFromParams(params: URLSearchParams): FilterState {
     country: params.get('country') ?? '',
     aliveOnly: params.get('alive') !== '0',
     recent24: params.get('recent') === '1',
+    staleOnly: params.get('stale') === '1',
+    starredOnly: params.get('starred') === '1',
     minVram: params.get('min_vram') ?? '',
     sortBy,
     sortDir,
@@ -110,6 +133,8 @@ function writeToParams(state: FilterState): URLSearchParams {
   if (state.country) p.set('country', state.country)
   if (!state.aliveOnly) p.set('alive', '0')
   if (state.recent24) p.set('recent', '1')
+  if (state.staleOnly) p.set('stale', '1')
+  if (state.starredOnly) p.set('starred', '1')
   if (state.minVram) p.set('min_vram', state.minVram)
   if (state.sortBy !== DEFAULT_FILTERS.sortBy) p.set('sort', state.sortBy)
   if (state.sortDir !== DEFAULT_FILTERS.sortDir) p.set('dir', state.sortDir)
@@ -117,6 +142,8 @@ function writeToParams(state: FilterState): URLSearchParams {
   if (state.pageSize !== DEFAULT_FILTERS.pageSize) p.set('size', String(state.pageSize))
   return p
 }
+
+type Saved = { name: string; search: string }
 
 function StatsBar({ stats }: { stats: Stats | null }) {
   if (!stats) return null
@@ -160,6 +187,35 @@ function StatsBar({ stats }: { stats: Stats | null }) {
   )
 }
 
+function ShortcutHelp({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="shortcut-help" onClick={onClose}>
+      <div className="panel" onClick={(e) => e.stopPropagation()}>
+        <h3>keyboard shortcuts</h3>
+        <dl>
+          <dt><span className="kbd">/</span></dt>
+          <dd>focus search</dd>
+          <dt><span className="kbd">m</span></dt>
+          <dd>focus model search</dd>
+          <dt><span className="kbd">r</span></dt>
+          <dd>reload</dd>
+          <dt><span className="kbd">Esc</span></dt>
+          <dd>clear search · close help</dd>
+          <dt><span className="kbd">a</span></dt>
+          <dd>toggle alive-only</dd>
+          <dt><span className="kbd">c</span></dt>
+          <dd>toggle compact rows</dd>
+          <dt><span className="kbd">?</span></dt>
+          <dd>show this help</dd>
+        </dl>
+        <div style={{ marginTop: 12, textAlign: 'right' }}>
+          <button onClick={onClose}>close</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function InstancesPage() {
   const [params, setParams] = useSearchParams()
   const filters = useMemo(() => readFromParams(params), [params])
@@ -170,12 +226,9 @@ export default function InstancesPage() {
     setParams(writeToParams(next), { replace: true })
   }
 
-  // local state for inputs we want debounced (so the URL doesn't churn per keystroke)
   const [searchInput, setSearchInput] = useState(filters.q)
   const [modelInput, setModelInput] = useState(filters.model)
   const [minVramInput, setMinVramInput] = useState(filters.minVram)
-
-  // sync local input when external (URL) state changes (e.g. quick-filter, clear)
   useEffect(() => setSearchInput(filters.q), [filters.q])
   useEffect(() => setModelInput(filters.model), [filters.model])
   useEffect(() => setMinVramInput(filters.minVram), [filters.minVram])
@@ -183,7 +236,6 @@ export default function InstancesPage() {
   const debSearch = useDebounce(searchInput, 250)
   const debModel = useDebounce(modelInput, 250)
   const debMinVram = useDebounce(minVramInput, 250)
-
   useEffect(() => {
     if (debSearch !== filters.q) setFilters({ q: debSearch })
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -206,6 +258,28 @@ export default function InstancesPage() {
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [gpus, setGpus] = useState<Distinct>([])
   const [countries, setCountries] = useState<Distinct>([])
+  const [helpOpen, setHelpOpen] = useState(false)
+
+  const [starred, setStarred] = useLocalStorage<number[]>('openports.starred', [])
+  const starredSet = useMemo(() => new Set(starred), [starred])
+  function toggleStar(id: number) {
+    setStarred((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]))
+  }
+
+  const [compact, setCompact] = useLocalStorage<boolean>('openports.compact', false)
+  const [saved, setSaved] = useLocalStorage<Saved[]>('openports.saved', [])
+  function saveCurrent() {
+    const name = window.prompt('name this view', 'untitled')
+    if (!name) return
+    const search = '?' + writeToParams(filters).toString()
+    setSaved((prev) => [...prev.filter((s) => s.name !== name), { name, search }])
+  }
+  function loadSaved(s: Saved) {
+    setParams(new URLSearchParams(s.search.replace(/^\?/, '')), { replace: true })
+  }
+  function deleteSaved(name: string) {
+    setSaved((prev) => prev.filter((s) => s.name !== name))
+  }
 
   const offset = (filters.page - 1) * filters.pageSize
   const query = useMemo<InstanceQuery>(
@@ -218,6 +292,7 @@ export default function InstancesPage() {
       country: filters.country || undefined,
       alive: filters.aliveOnly ? true : undefined,
       since_hours: filters.recent24 ? 24 : undefined,
+      stale_hours: filters.staleOnly ? 24 : undefined,
       min_vram: filters.minVram ? Number(filters.minVram) : undefined,
       sort_by: filters.sortBy,
       sort_dir: filters.sortDir,
@@ -265,6 +340,58 @@ export default function InstancesPage() {
     return () => clearInterval(t)
   }, [autoRefresh, load])
 
+  // keyboard shortcuts
+  const searchRef = useRef<HTMLInputElement | null>(null)
+  const modelRef = useRef<HTMLInputElement | null>(null)
+  useEffect(() => {
+    function isTypingTarget(t: EventTarget | null) {
+      const el = t as HTMLElement | null
+      if (!el) return false
+      const tag = el.tagName
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
+    }
+    function onKey(e: KeyboardEvent) {
+      if (helpOpen && e.key === 'Escape') {
+        setHelpOpen(false)
+        return
+      }
+      if (isTypingTarget(e.target)) {
+        if (e.key === 'Escape' && (e.target as HTMLElement).tagName === 'INPUT') {
+          ;(e.target as HTMLInputElement).blur()
+        }
+        return
+      }
+      if (e.key === '/') {
+        e.preventDefault()
+        searchRef.current?.focus()
+      } else if (e.key === 'm') {
+        e.preventDefault()
+        modelRef.current?.focus()
+      } else if (e.key === 'r') {
+        e.preventDefault()
+        load()
+      } else if (e.key === 'a') {
+        e.preventDefault()
+        setFilters({ aliveOnly: !filters.aliveOnly })
+      } else if (e.key === 'c') {
+        e.preventDefault()
+        setCompact((v) => !v)
+      } else if (e.key === '?') {
+        e.preventDefault()
+        setHelpOpen(true)
+      } else if (e.key === 'Escape') {
+        if (filters.q || filters.model) {
+          setSearchInput('')
+          setModelInput('')
+          setFilters({ q: '', model: '' })
+        }
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, helpOpen, load])
+
   function toggleSort(k: SortKey) {
     if (filters.sortBy === k) setFilters({ sortDir: filters.sortDir === 'asc' ? 'desc' : 'asc' })
     else setFilters({ sortBy: k, sortDir: 'desc' })
@@ -291,6 +418,8 @@ export default function InstancesPage() {
     (filters.country ? 1 : 0) +
     (filters.aliveOnly ? 0 : 1) +
     (filters.recent24 ? 1 : 0) +
+    (filters.staleOnly ? 1 : 0) +
+    (filters.starredOnly ? 1 : 0) +
     (filters.minVram ? 1 : 0)
 
   async function onScan() {
@@ -315,9 +444,16 @@ export default function InstancesPage() {
     }
   }
 
+  // client-side starred filter
+  const visibleItems = useMemo(() => {
+    if (!items) return null
+    if (filters.starredOnly) return items.filter((it) => starredSet.has(it.id))
+    return items
+  }, [items, filters.starredOnly, starredSet])
+
   const totalPages = filteredCount ? Math.max(1, Math.ceil(filteredCount / filters.pageSize)) : 1
   const showingFrom = filteredCount === 0 ? 0 : offset + 1
-  const showingTo = Math.min(offset + (items?.length ?? 0), filteredCount ?? 0)
+  const showingTo = Math.min(offset + (visibleItems?.length ?? 0), filteredCount ?? 0)
 
   return (
     <div>
@@ -337,23 +473,25 @@ export default function InstancesPage() {
         </div>
 
         <input
+          ref={searchRef}
           className="search"
-          placeholder="search ip, gpu, version, host…"
+          placeholder="search ip, gpu, version, host… [/]"
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
         />
 
         <input
-          placeholder="model name (e.g. qwen, llama3)"
+          ref={modelRef}
+          placeholder="model name [m]"
           value={modelInput}
           onChange={(e) => setModelInput(e.target.value)}
-          style={{ flex: '1 1 180px', minWidth: 160, maxWidth: 240 }}
+          style={{ flex: '1 1 180px', minWidth: 140, maxWidth: 220 }}
         />
 
         <div className="right row">
           {scanMsg && <span className="muted" style={{ fontSize: 12 }}>{scanMsg}</span>}
           {loading && <span className="spinner" />}
-          <button onClick={load} title="refresh now">↻</button>
+          <button onClick={load} title="refresh now [r]">↻</button>
           <button
             className={autoRefresh ? 'primary' : ''}
             onClick={() => setAutoRefresh((v) => !v)}
@@ -369,6 +507,9 @@ export default function InstancesPage() {
           </button>
           <button onClick={onScan} title="trigger a new shodan scan">
             run scan
+          </button>
+          <button className="ghost icon" title="keyboard shortcuts [?]" onClick={() => setHelpOpen(true)}>
+            ?
           </button>
         </div>
       </div>
@@ -417,11 +558,17 @@ export default function InstancesPage() {
         />
 
         <div className="chips">
-          <span className={`chip ${filters.aliveOnly ? 'active' : ''}`} onClick={() => setFilters({ aliveOnly: !filters.aliveOnly })}>
+          <span className={`chip ${filters.aliveOnly ? 'active' : ''}`} onClick={() => setFilters({ aliveOnly: !filters.aliveOnly })} title="[a]">
             alive only
           </span>
           <span className={`chip ${filters.recent24 ? 'active' : ''}`} onClick={() => setFilters({ recent24: !filters.recent24 })}>
             seen ≤ 24h
+          </span>
+          <span className={`chip ${filters.staleOnly ? 'active' : ''}`} onClick={() => setFilters({ staleOnly: !filters.staleOnly })}>
+            stale &gt; 24h
+          </span>
+          <span className={`chip ${filters.starredOnly ? 'active' : ''}`} onClick={() => setFilters({ starredOnly: !filters.starredOnly })}>
+            ★ starred ({starred.length})
           </span>
           {activeFilterCount > 0 && (
             <span className="chip" onClick={clearAll} title="clear all filters">
@@ -429,7 +576,44 @@ export default function InstancesPage() {
             </span>
           )}
         </div>
+
+        <div className="right row" style={{ gap: 6 }}>
+          <button onClick={() => setCompact((v) => !v)} title="density [c]">
+            {compact ? 'compact ✓' : 'compact'}
+          </button>
+          <button onClick={saveCurrent} title="save current filters as a named view">
+            save view
+          </button>
+        </div>
       </div>
+
+      {saved.length > 0 && (
+        <div className="chips" style={{ marginBottom: 12 }}>
+          <span className="muted" style={{ fontSize: 11, alignSelf: 'center', marginRight: 4 }}>
+            saved:
+          </span>
+          {saved.map((s) => (
+            <span
+              key={s.name}
+              className="chip"
+              onClick={() => loadSaved(s)}
+              title={`load: ${s.search}`}
+            >
+              {s.name}
+              <span
+                className="x"
+                title="delete"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  deleteSaved(s.name)
+                }}
+              >
+                ×
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
 
       {err && <div className="error" style={{ marginBottom: 12 }}>{err}</div>}
 
@@ -439,6 +623,8 @@ export default function InstancesPage() {
             ? 'counting…'
             : filteredCount === 0
             ? 'no matches'
+            : filters.starredOnly
+            ? `showing ${fmtNumber(visibleItems?.length ?? 0)} starred`
             : `showing ${fmtNumber(showingFrom)}–${fmtNumber(showingTo)} of ${fmtNumber(filteredCount)}`}
         </span>
         <span className="right row" style={{ gap: 4 }}>
@@ -458,9 +644,10 @@ export default function InstancesPage() {
       </div>
 
       <div className="table-wrap">
-        <table className="data">
+        <table className={`data ${compact ? 'compact' : ''}`}>
           <thead>
             <tr>
+              <th>★</th>
               <th>service</th>
               <th>host</th>
               <th>provider</th>
@@ -487,18 +674,28 @@ export default function InstancesPage() {
             </tr>
           </thead>
           <tbody>
-            {items && items.length === 0 && (
+            {visibleItems && visibleItems.length === 0 && (
               <tr>
-                <td colSpan={13} className="empty">
+                <td colSpan={14} className="empty">
                   no instances match these filters
                 </td>
               </tr>
             )}
-            {items?.map((it) => {
+            {visibleItems?.map((it) => {
               const country = it.shodan?.location?.country_name ?? null
               const url = `http://${it.ip}:${it.port}`
+              const on = starredSet.has(it.id)
               return (
                 <tr key={it.id}>
+                  <td>
+                    <button
+                      className={`star ${on ? 'on' : ''}`}
+                      onClick={() => toggleStar(it.id)}
+                      title={on ? 'unstar' : 'star (saved locally)'}
+                    >
+                      {on ? '★' : '☆'}
+                    </button>
+                  </td>
                   <td>
                     <span
                       className={`badge svc-${it.service}`}
@@ -578,7 +775,7 @@ export default function InstancesPage() {
             })}
             {!items && (
               <tr>
-                <td colSpan={13} className="empty">
+                <td colSpan={14} className="empty">
                   <span className="spinner" /> loading…
                 </td>
               </tr>
@@ -587,7 +784,7 @@ export default function InstancesPage() {
         </table>
       </div>
 
-      {filteredCount !== null && filteredCount > filters.pageSize && (
+      {!filters.starredOnly && filteredCount !== null && filteredCount > filters.pageSize && (
         <div className="row" style={{ marginTop: 10, gap: 6 }}>
           <button
             disabled={filters.page <= 1}
@@ -605,10 +802,12 @@ export default function InstancesPage() {
             next →
           </button>
           <span className="right muted" style={{ fontSize: 12 }}>
-            url updates with filters — copy address to share
+            url updates with filters — copy address to share · press <span className="kbd">?</span> for shortcuts
           </span>
         </div>
       )}
+
+      {helpOpen && <ShortcutHelp onClose={() => setHelpOpen(false)} />}
     </div>
   )
 }
