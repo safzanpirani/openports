@@ -54,7 +54,13 @@ class Settings(BaseSettings):
     OLLAMA_SHOW_LIMIT: int = 30
 
     # Scheduler
-    SCAN_INTERVAL_MINUTES: int = 0  # 0 disables periodic scans; use manual trigger
+    # 0 disables that loop; use manual trigger.
+    SCAN_INTERVAL_MINUTES: int = 0
+    RECHECK_INTERVAL_MINUTES: int = 0
+    # Only re-fingerprint instances whose last_checked_at is older than this many minutes.
+    RECHECK_STALE_AFTER_MINUTES: int = 60
+    # Cap concurrent re-fingerprints (uses HTTP, so be polite).
+    RECHECK_CONCURRENCY: int = 25
 
 
 settings = Settings()

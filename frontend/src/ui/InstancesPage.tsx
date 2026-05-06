@@ -11,6 +11,7 @@ import {
   fetchDistinct,
   fetchInstances,
   fetchStats,
+  triggerRecheck,
   triggerShodanScan,
 } from './api'
 import {
@@ -119,6 +120,11 @@ function writeToParams(state: FilterState): URLSearchParams {
 
 function StatsBar({ stats }: { stats: Stats | null }) {
   if (!stats) return null
+  const sched = stats.scheduler
+  const schedLine =
+    sched && (sched.scan_interval_minutes > 0 || sched.recheck_interval_minutes > 0)
+      ? `cron: scan/${sched.scan_interval_minutes || '–'}m · recheck/${sched.recheck_interval_minutes || '–'}m`
+      : 'cron: off'
   return (
     <div className="stats-grid">
       <div className="card stat">
@@ -142,8 +148,13 @@ function StatsBar({ stats }: { stats: Stats | null }) {
           {fmtNumber(stats.recent_24h)} <span className="muted" style={{ fontWeight: 400 }}>/ {fmtNumber(stats.recent_7d)}</span>
         </div>
         <div className="sub">
-          {stats.last_run ? `last scan ${fmtRelative(stats.last_run.started_at)}` : 'no scans yet'}
+          {stats.last_run ? `last scan ${fmtRelative(stats.last_run.started_at)}` : 'no scans yet'} · {schedLine}
         </div>
+      </div>
+      <div className="card stat" title="instances whose last_checked_at is older than 24h">
+        <div className="label">stale &gt; 24h</div>
+        <div className="value">{fmtNumber(stats.stale_24h ?? 0)}</div>
+        <div className="sub muted">re-check from below</div>
       </div>
     </div>
   )
@@ -293,6 +304,17 @@ export default function InstancesPage() {
     }
   }
 
+  async function onRecheck() {
+    setScanMsg('rechecking stored instances…')
+    try {
+      await triggerRecheck({ only_stale: true }, adminToken() || undefined)
+      setScanMsg('recheck scheduled.')
+      setTimeout(() => setScanMsg(null), 4000)
+    } catch (e) {
+      setScanMsg(String(e))
+    }
+  }
+
   const totalPages = filteredCount ? Math.max(1, Math.ceil(filteredCount / filters.pageSize)) : 1
   const showingFrom = filteredCount === 0 ? 0 : offset + 1
   const showingTo = Math.min(offset + (items?.length ?? 0), filteredCount ?? 0)
@@ -342,6 +364,9 @@ export default function InstancesPage() {
           <a className="btn plain" href={exportCsvUrl(query)} target="_blank" rel="noreferrer" title="download filtered rows as csv">
             ↧ csv
           </a>
+          <button onClick={onRecheck} title="re-fingerprint stored instances (skips fresh ones)">
+            recheck
+          </button>
           <button onClick={onScan} title="trigger a new shodan scan">
             run scan
           </button>

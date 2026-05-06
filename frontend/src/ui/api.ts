@@ -47,7 +47,12 @@ export type Stats = {
   by_provider: Record<string, number>
   recent_24h: number
   recent_7d: number
+  stale_24h?: number
   last_run: ScanRun | null
+  scheduler?: {
+    scan_interval_minutes: number
+    recheck_interval_minutes: number
+  }
 }
 
 export type Distinct = { value: string; count: number }[]
@@ -141,4 +146,20 @@ export async function triggerShodanScan(adminToken?: string): Promise<void> {
     headers: adminHeaders(adminToken),
   })
   if (!r.ok) throw new Error(`scan trigger failed: ${await r.text()}`)
+}
+
+export async function triggerRecheck(
+  opts: { only_stale?: boolean; only_alive?: boolean; limit?: number },
+  adminToken?: string,
+): Promise<void> {
+  const s = new URLSearchParams()
+  if (opts.only_stale === false) s.set('only_stale', 'false')
+  if (opts.only_alive) s.set('only_alive', 'true')
+  if (opts.limit) s.set('limit', String(opts.limit))
+  const qs = s.toString()
+  const r = await fetch('/api/scan/recheck' + (qs ? `?${qs}` : ''), {
+    method: 'POST',
+    headers: adminHeaders(adminToken),
+  })
+  if (!r.ok) throw new Error(`recheck trigger failed: ${await r.text()}`)
 }

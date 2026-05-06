@@ -15,7 +15,9 @@ from sqlmodel import Session, select
 from .config import settings
 from .db import get_session, init_db
 from .models import Instance, ScanRun, Service
+from .recheck import run_recheck
 from .scanner import run_shodan_scan
+from .scheduler import shutdown_scheduler, start_scheduler
 from .security import require_admin
 
 
@@ -35,26 +37,22 @@ from .telegram import poll_telegram_updates, send_telegram_message
 
 
 async def _telegram_handler(text_in: str) -> None:
-    from sqlmodel import Session as _Session
-    from .db import engine
-    from sqlmodel import select
+    from . import commands as cmds
 
-    cmd = text_in.split()[0].lower()
-    if cmd == "/scan":
-        await send_telegram_message("Starting Shodan scan...")
-        loop = asyncio.get_running_loop()
-        loop.run_in_executor(None, _run_shodan_scan_job, None)
-        await send_telegram_message("Scan job scheduled.")
-    elif cmd == "/status":
-        with _Session(engine) as s:
-            alive_count = len(
-                s.exec(select(Instance).where(Instance.is_alive == True)).all()
-            )
-            total = len(s.exec(select(Instance)).all())
-        await send_telegram_message(
-            f"Status:\nTotal instances: {total}\nAlive instances: {alive_count}"
-        )
-    elif cmd == "/scrape":
+    parts = text_in.split()
+    if not parts:
+        return
+    cmd = parts[0].lower()
+
+    # New + standard commands handled in commands.py
+    if cmd in {"/help", "/ping", "/status", "/top", "/find", "/scan", "/recheck"}:
+        try:
+            await cmds.handle_command(text_in)
+            return
+        except NotImplementedError:
+            pass
+
+    if cmd == "/scrape":
         parts = text_in.split()
         control_tokens = {"gpu", "model", "force", "-page", "--page"}
         force_rescan = any(p.lower() == "force" for p in parts)
@@ -134,8 +132,6 @@ async def _telegram_handler(text_in: str) -> None:
         await send_telegram_message(
             "Scraper job scheduled (Check bot logs/chat for output)."
         )
-    elif cmd == "/ping":
-        await send_telegram_message("pong")
 
 
 async def _start_telegram_poller() -> None:
@@ -146,6 +142,12 @@ async def _start_telegram_poller() -> None:
 def _startup() -> None:
     init_db()
     asyncio.create_task(_start_telegram_poller())
+    start_scheduler()
+
+
+@app.on_event("shutdown")
+def _shutdown() -> None:
+    shutdown_scheduler()
 
 
 _SORTABLE = {
@@ -345,6 +347,7 @@ def stats(session: Session = Depends(get_session)):
     cutoff_7d = now - timedelta(days=7)
     recent_24h = sum(1 for r in all_rows if r.first_seen_at >= cutoff_24h)
     recent_7d = sum(1 for r in all_rows if r.first_seen_at >= cutoff_7d)
+    stale_24h = sum(1 for r in all_rows if r.last_checked_at < cutoff_24h)
 
     last_run = session.exec(
         select(ScanRun).order_by(ScanRun.started_at.desc()).limit(1)
@@ -357,7 +360,12 @@ def stats(session: Session = Depends(get_session)):
         "by_provider": by_provider,
         "recent_24h": recent_24h,
         "recent_7d": recent_7d,
+        "stale_24h": stale_24h,
         "last_run": last_run,
+        "scheduler": {
+            "scan_interval_minutes": settings.SCAN_INTERVAL_MINUTES,
+            "recheck_interval_minutes": settings.RECHECK_INTERVAL_MINUTES,
+        },
     }
 
 
@@ -496,11 +504,45 @@ async def trigger_shodan_scan(
     return {"status": "scheduled"}
 
 
-# If you build the frontend into frontend/dist and copy it next to backend, we can serve it.
-try:
-    app.mount(
-        "/", StaticFiles(directory="../frontend/dist", html=True), name="frontend"
-    )
-except Exception:
-    # dev mode: frontend runs separately
-    pass
+def _run_recheck_job(only_stale: bool, only_alive: bool, limit: int | None) -> None:
+    from sqlmodel import Session as _Session
+
+    from .db import engine
+
+    with _Session(engine) as s:
+        asyncio.run(run_recheck(s, only_stale=only_stale, only_alive=only_alive, limit=limit))
+
+
+@app.post("/api/scan/recheck", dependencies=[Depends(require_admin)])
+async def trigger_recheck(
+    background: BackgroundTasks,
+    only_stale: bool = Query(default=True),
+    only_alive: bool = Query(default=False),
+    limit: int | None = Query(default=None, ge=1, le=100000),
+):
+    """Re-fingerprint stored instances. By default skips ones checked recently."""
+    background.add_task(_run_recheck_job, only_stale, only_alive, limit)
+    return {"status": "scheduled"}
+
+
+# If you build the frontend into frontend/dist and copy it next to backend, serve it.
+# We need SPA fallback (any non-/api path serves index.html so React Router handles routing).
+import os as _os
+from fastapi.responses import FileResponse
+
+_FRONTEND_DIR = _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..", "..", "frontend", "dist"))
+if _os.path.isdir(_FRONTEND_DIR):
+    app.mount("/assets", StaticFiles(directory=_os.path.join(_FRONTEND_DIR, "assets")), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def _spa_fallback(full_path: str):
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        # Serve a static file if it exists (favicon, robots, etc.), else index.html.
+        candidate = _os.path.join(_FRONTEND_DIR, full_path)
+        if full_path and _os.path.isfile(candidate):
+            return FileResponse(candidate)
+        index = _os.path.join(_FRONTEND_DIR, "index.html")
+        if _os.path.isfile(index):
+            return FileResponse(index)
+        raise HTTPException(status_code=404, detail="Not Found")
