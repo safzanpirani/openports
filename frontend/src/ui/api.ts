@@ -22,6 +22,7 @@ export type Instance = {
   node_count?: number | null
   provider?: string | null
   reverse_dns?: string | null
+  shodan?: any
   service_metadata?: any
   models?: any
   last_error?: string | null
@@ -39,43 +40,96 @@ export type ScanRun = {
   error?: string | null
 }
 
-export async function fetchInstances(params?: {
+export type Stats = {
+  total: number
+  alive: number
+  by_service: Record<string, { total: number; alive: number }>
+  by_provider: Record<string, number>
+  recent_24h: number
+  recent_7d: number
+  last_run: ScanRun | null
+}
+
+export type Distinct = { value: string; count: number }[]
+
+export type InstanceQuery = {
   service?: Service
-  provider?: string
   alive?: boolean
-}): Promise<Instance[]> {
-  const search = new URLSearchParams()
-  if (params?.service) search.set('service', params.service)
-  if (params?.provider) search.set('provider', params.provider)
-  if (params?.alive !== undefined) search.set('alive', String(params.alive))
-  const qs = search.toString()
-  const r = await fetch('/api/instances' + (qs ? `?${qs}` : ''))
-  if (!r.ok) throw new Error('Failed to load instances')
+  provider?: string
+  q?: string
+  model?: string
+  gpu?: string
+  country?: string
+  since_hours?: number
+  min_vram?: number
+  sort_by?: string
+  sort_dir?: 'asc' | 'desc'
+  limit?: number
+  offset?: number
+}
+
+function toSearch(p?: InstanceQuery): string {
+  const s = new URLSearchParams()
+  if (!p) return ''
+  Object.entries(p).forEach(([k, v]) => {
+    if (v === undefined || v === null || v === '') return
+    s.set(k, String(v))
+  })
+  const qs = s.toString()
+  return qs ? `?${qs}` : ''
+}
+
+export async function fetchInstances(p?: InstanceQuery): Promise<Instance[]> {
+  const r = await fetch('/api/instances' + toSearch(p))
+  if (!r.ok) throw new Error('failed to load instances')
   return r.json()
 }
 
 export async function fetchInstance(id: string): Promise<Instance> {
   const r = await fetch(`/api/instances/${id}`)
-  if (!r.ok) throw new Error('Failed to load instance')
+  if (!r.ok) throw new Error('failed to load instance')
   return r.json()
 }
 
 export async function fetchRuns(): Promise<ScanRun[]> {
   const r = await fetch('/api/scan/runs')
-  if (!r.ok) throw new Error('Failed to load runs')
+  if (!r.ok) throw new Error('failed to load runs')
+  return r.json()
+}
+
+export async function fetchStats(): Promise<Stats> {
+  const r = await fetch('/api/stats')
+  if (!r.ok) throw new Error('failed to load stats')
+  return r.json()
+}
+
+export async function fetchDistinct(field: string): Promise<Distinct> {
+  const r = await fetch(`/api/instances/distinct/${field}`)
+  if (!r.ok) throw new Error('failed to load ' + field)
+  return r.json()
+}
+
+export function exportCsvUrl(p?: InstanceQuery): string {
+  return '/api/instances.csv' + toSearch(p)
+}
+
+function adminHeaders(adminToken?: string): Record<string, string> {
+  return adminToken ? { Authorization: `Bearer ${adminToken}` } : {}
+}
+
+export async function refreshInstance(id: number, adminToken?: string): Promise<Instance> {
+  const r = await fetch(`/api/instances/${id}/refresh`, {
+    method: 'POST',
+    headers: adminHeaders(adminToken),
+  })
+  if (!r.ok) throw new Error(`refresh failed: ${await r.text()}`)
   return r.json()
 }
 
 export async function triggerShodanScan(adminToken?: string): Promise<void> {
-  const headers: Record<string, string> = {}
-  if (adminToken) headers['Authorization'] = `Bearer ${adminToken}`
-
   const r = await fetch('/api/scan/shodan', {
     method: 'POST',
-    headers,
+    headers: adminHeaders(adminToken),
   })
-  if (!r.ok) {
-    const txt = await r.text()
-    throw new Error(`Scan trigger failed: ${txt}`)
-  }
+  if (!r.ok) throw new Error(`scan trigger failed: ${await r.text()}`)
 }
