@@ -10,7 +10,8 @@ from sqlmodel import Session, select
 from .config import settings
 from .enrich_hosting import classify_provider, enrich_ip_hosting
 from .fingerprints import verify_comfyui, verify_ollama
-from .models import Instance, ScanRun, Service
+from .models import Instance, InstanceChange, InstanceCheck, ScanRun, Service
+from .models_summary import diff_names, model_names
 from .shodan_client import candidates_for_ports
 from .telegram import send_telegram_message
 
@@ -99,6 +100,12 @@ def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok:
     created = False
     now = datetime.utcnow()
 
+    # Snapshot pre-state so we can diff after writing
+    pre_alive = None if not inst else inst.is_alive
+    pre_version = None if not inst else inst.version
+    pre_gpu = None if not inst else inst.gpu_name
+    pre_models = model_names(service, inst.models if inst else None)
+
     if not inst:
         inst = Instance(service=service, ip=ip, port=port)
         created = True
@@ -128,7 +135,7 @@ def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok:
         inst.version = version
     if gpu_name:
         inst.gpu_name = gpu_name
-        
+
     for f in ("vram_total_gb", "vram_free_gb", "ram_total_gb", "ram_free_gb", "model_count", "max_model_params", "max_context", "node_count"):
         val = metrics.get(f)
         if val is not None:
@@ -137,6 +144,57 @@ def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok:
     session.add(inst)
     session.commit()
     session.refresh(inst)
+
+    # Append a check row + any change rows. Best-effort; never abort the upsert.
+    try:
+        check = InstanceCheck(
+            instance_id=inst.id,
+            checked_at=now,
+            is_alive=inst.is_alive,
+            version=inst.version,
+            gpu_name=inst.gpu_name,
+            vram_total_gb=inst.vram_total_gb,
+            vram_free_gb=inst.vram_free_gb,
+            model_count=inst.model_count,
+            max_model_params=inst.max_model_params,
+            max_context=inst.max_context,
+            error=inst.last_error,
+        )
+        session.add(check)
+
+        if created:
+            session.add(InstanceChange(
+                instance_id=inst.id, at=now, kind="first_seen",
+                before=None, after={"alive": inst.is_alive, "version": inst.version, "gpu": inst.gpu_name},
+            ))
+        else:
+            if pre_alive is not None and pre_alive != inst.is_alive:
+                session.add(InstanceChange(
+                    instance_id=inst.id, at=now, kind="alive_changed",
+                    before={"alive": pre_alive}, after={"alive": inst.is_alive},
+                ))
+            if pre_version != inst.version and inst.version:
+                session.add(InstanceChange(
+                    instance_id=inst.id, at=now, kind="version_changed",
+                    before={"version": pre_version}, after={"version": inst.version},
+                ))
+            if pre_gpu != inst.gpu_name and inst.gpu_name:
+                session.add(InstanceChange(
+                    instance_id=inst.id, at=now, kind="gpu_changed",
+                    before={"gpu": pre_gpu}, after={"gpu": inst.gpu_name},
+                ))
+            if models is not None:
+                post_models = model_names(service, inst.models)
+                d = diff_names(pre_models, post_models)
+                if d["added"] or d["removed"]:
+                    session.add(InstanceChange(
+                        instance_id=inst.id, at=now, kind="models_changed",
+                        before={"count": len(pre_models)},
+                        after={"count": len(post_models), **d},
+                    ))
+        session.commit()
+    except Exception:
+        session.rollback()
 
     return inst, created
 

@@ -9,12 +9,13 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, or_, text
+from sqlalchemy import Text, cast, func, or_
 from sqlmodel import Session, select
 
 from .config import settings
 from .db import get_session, init_db
-from .models import Instance, ScanRun, Service
+from .models import Instance, InstanceChange, InstanceCheck, ScanRun, Service
+from .models_summary import model_names
 from .recheck import run_recheck
 from .scanner import run_shodan_scan
 from .scheduler import shutdown_scheduler, start_scheduler
@@ -206,7 +207,7 @@ def _build_filtered_query(
     if model:
         like = f"%{model.lower()}%"
         # SQLite: cast JSON column to text and substring-match (case-insensitive).
-        stmt = stmt.where(func.lower(func.cast(Instance.models, text("TEXT"))).like(like))
+        stmt = stmt.where(func.lower(cast(Instance.models, Text)).like(like))
     if gpu:
         like = f"%{gpu.lower()}%"
         stmt = stmt.where(func.lower(func.coalesce(Instance.gpu_name, "")).like(like))
@@ -294,6 +295,76 @@ def get_instance(instance_id: int, session: Session = Depends(get_session)):
     if inst is None:
         raise HTTPException(status_code=404, detail="Instance not found")
     return inst
+
+
+@app.get("/api/instances/{instance_id}/history")
+def instance_history(
+    instance_id: int,
+    session: Session = Depends(get_session),
+    limit: int = Query(default=200, ge=1, le=2000),
+):
+    rows = session.exec(
+        select(InstanceCheck)
+        .where(InstanceCheck.instance_id == instance_id)
+        .order_by(InstanceCheck.checked_at.desc())
+        .limit(limit)
+    ).all()
+    return rows
+
+
+@app.get("/api/instances/{instance_id}/changes")
+def instance_changes(
+    instance_id: int,
+    session: Session = Depends(get_session),
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    rows = session.exec(
+        select(InstanceChange)
+        .where(InstanceChange.instance_id == instance_id)
+        .order_by(InstanceChange.at.desc())
+        .limit(limit)
+    ).all()
+    return rows
+
+
+@app.get("/api/models/catalog")
+def models_catalog(
+    session: Session = Depends(get_session),
+    service: Service | None = None,
+    q: str | None = None,
+    alive_only: bool = Query(default=True),
+    limit: int = Query(default=500, ge=1, le=5000),
+):
+    """Aggregate every unique model name across instances with a count.
+
+    For Ollama, names come from `models.tags.models[].name`. For ComfyUI,
+    we use `<folder>/<filename>` (e.g. `checkpoints/foo.safetensors`).
+    """
+
+    stmt = select(Instance)
+    if service:
+        stmt = stmt.where(Instance.service == service)
+    if alive_only:
+        stmt = stmt.where(Instance.is_alive == True)
+    rows = session.exec(stmt).all()
+
+    counts: dict[tuple[str, str], int] = {}
+    for r in rows:
+        for name in model_names(r.service, r.models):
+            key = (r.service.value, name)
+            counts[key] = counts.get(key, 0) + 1
+
+    items = [
+        {"service": svc, "name": name, "count": c}
+        for (svc, name), c in counts.items()
+    ]
+
+    if q:
+        q_l = q.lower()
+        items = [it for it in items if q_l in it["name"].lower()]
+
+    items.sort(key=lambda it: (-it["count"], it["name"]))
+    return {"total": len(items), "items": items[:limit]}
 
 
 @app.post("/api/instances/{instance_id}/refresh", dependencies=[Depends(require_admin)])

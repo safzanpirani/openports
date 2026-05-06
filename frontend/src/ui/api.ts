@@ -118,6 +118,61 @@ export async function fetchStats(): Promise<Stats> {
   return r.json()
 }
 
+export type InstanceCheck = {
+  id: number
+  instance_id: number
+  checked_at: string
+  is_alive: boolean
+  version?: string | null
+  gpu_name?: string | null
+  vram_total_gb?: number | null
+  vram_free_gb?: number | null
+  model_count?: number | null
+  max_model_params?: number | null
+  max_context?: number | null
+  error?: string | null
+}
+
+export type InstanceChange = {
+  id: number
+  instance_id: number
+  at: string
+  kind: string
+  before?: any
+  after?: any
+}
+
+export async function fetchHistory(id: number, limit = 200): Promise<InstanceCheck[]> {
+  const r = await fetch(`/api/instances/${id}/history?limit=${limit}`)
+  if (!r.ok) throw new Error('failed to load history')
+  return r.json()
+}
+
+export async function fetchChanges(id: number, limit = 100): Promise<InstanceChange[]> {
+  const r = await fetch(`/api/instances/${id}/changes?limit=${limit}`)
+  if (!r.ok) throw new Error('failed to load changes')
+  return r.json()
+}
+
+export type CatalogEntry = { service: 'comfyui' | 'ollama'; name: string; count: number }
+
+export async function fetchCatalog(p?: {
+  service?: Service
+  q?: string
+  alive_only?: boolean
+  limit?: number
+}): Promise<{ total: number; items: CatalogEntry[] }> {
+  const s = new URLSearchParams()
+  if (p?.service) s.set('service', p.service)
+  if (p?.q) s.set('q', p.q)
+  if (p?.alive_only !== undefined) s.set('alive_only', String(p.alive_only))
+  if (p?.limit) s.set('limit', String(p.limit))
+  const qs = s.toString()
+  const r = await fetch('/api/models/catalog' + (qs ? `?${qs}` : ''))
+  if (!r.ok) throw new Error('failed to load catalog')
+  return r.json()
+}
+
 export async function fetchDistinct(field: string): Promise<Distinct> {
   const r = await fetch(`/api/instances/distinct/${field}`)
   if (!r.ok) throw new Error('failed to load ' + field)

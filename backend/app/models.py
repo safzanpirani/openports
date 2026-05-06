@@ -65,3 +65,36 @@ class ScanRun(SQLModel, table=True):
     new_instances: int = 0
 
     error: str | None = Field(default=None)
+
+
+class InstanceCheck(SQLModel, table=True):
+    """One row per fingerprint attempt. Lightweight history of an instance."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    instance_id: int = Field(foreign_key="instance.id", index=True)
+    checked_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    is_alive: bool
+    version: str | None = Field(default=None)
+    gpu_name: str | None = Field(default=None)
+    vram_total_gb: float | None = Field(default=None)
+    vram_free_gb: float | None = Field(default=None)
+    model_count: int | None = Field(default=None)
+    max_model_params: float | None = Field(default=None)
+    max_context: int | None = Field(default=None)
+    error: str | None = Field(default=None)
+
+
+class InstanceChange(SQLModel, table=True):
+    """One row per detected change between consecutive fingerprints.
+
+    `kind` is one of: `alive_changed`, `version_changed`, `models_changed`,
+    `gpu_changed`, `first_seen`. `before`/`after` carry the relevant context
+    in JSON shape (e.g. `{added: [...], removed: [...]}` for models).
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    instance_id: int = Field(foreign_key="instance.id", index=True)
+    at: datetime = Field(default_factory=datetime.utcnow, index=True)
+    kind: str = Field(index=True)
+    before: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+    after: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))

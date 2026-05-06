@@ -7,7 +7,8 @@ import logging
 import shlex
 from typing import Any
 
-from sqlmodel import Session, func, or_, select
+from sqlalchemy import Text, cast, func
+from sqlmodel import Session, select
 
 from .config import settings
 from .models import Instance, ScanRun, Service
@@ -118,7 +119,7 @@ async def _cmd_top(engine, n: int) -> str:
         rows = list(s.exec(
             select(Instance)
             .where(Instance.is_alive == True)
-            .order_by(Instance.vram_total_gb.desc().nullslast())
+            .order_by(Instance.vram_total_gb.is_(None), Instance.vram_total_gb.desc())
             .limit(n)
         ).all())
     return _format_rows(rows, f"top {n} alive by vram", max_lines=n)
@@ -132,9 +133,8 @@ async def _cmd_find(engine, key: str, value: str) -> str:
         if key_l == "gpu":
             stmt = stmt.where(func.lower(func.coalesce(Instance.gpu_name, "")).like(f"%{val_l}%"))
         elif key_l == "model":
-            from sqlalchemy import text as _text
             stmt = stmt.where(
-                func.lower(func.cast(Instance.models, _text("TEXT"))).like(f"%{val_l}%")
+                func.lower(cast(Instance.models, Text)).like(f"%{val_l}%")
             )
         elif key_l == "country":
             stmt = stmt.where(

@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Instance, fetchInstance, refreshInstance } from './api'
+import {
+  Instance,
+  InstanceChange,
+  InstanceCheck,
+  fetchChanges,
+  fetchHistory,
+  fetchInstance,
+  refreshInstance,
+} from './api'
 import {
   adminToken,
   copy,
@@ -132,9 +140,51 @@ function OllamaModelTable({ models }: { models: OllamaModels | null | undefined 
   )
 }
 
+function fmtAfter(c: InstanceChange): string {
+  const k = c.kind
+  if (k === 'first_seen') return 'first seen'
+  if (k === 'alive_changed') return c.after?.alive ? 'came back alive' : 'went down'
+  if (k === 'version_changed') return `version: ${c.before?.version ?? '—'} → ${c.after?.version ?? '—'}`
+  if (k === 'gpu_changed') return `gpu: ${c.before?.gpu ?? '—'} → ${c.after?.gpu ?? '—'}`
+  if (k === 'models_changed') {
+    const a = c.after?.added?.length ?? 0
+    const r = c.after?.removed?.length ?? 0
+    return `models changed: +${a} / −${r}`
+  }
+  return k
+}
+
+function HistorySpark({ rows }: { rows: InstanceCheck[] | null }) {
+  if (!rows || rows.length === 0) return <div className="muted">no history yet — appears after the next re-check</div>
+  // rows are newest-first; reverse for left-to-right time
+  const ordered = [...rows].reverse()
+  const w = Math.max(180, ordered.length * 6)
+  const h = 18
+  return (
+    <svg width={w} height={h} style={{ display: 'block' }}>
+      {ordered.map((r, i) => (
+        <rect
+          key={r.id}
+          x={i * 6}
+          y={0}
+          width={5}
+          height={h}
+          rx={1.5}
+          fill={r.is_alive ? 'var(--accent)' : 'var(--danger)'}
+          opacity={r.is_alive ? 0.9 : 0.7}
+        >
+          <title>{`${r.checked_at} · ${r.is_alive ? 'alive' : 'down'}`}</title>
+        </rect>
+      ))}
+    </svg>
+  )
+}
+
 export default function InstanceDetailPage() {
   const { id } = useParams()
   const [item, setItem] = useState<Instance | null>(null)
+  const [history, setHistory] = useState<InstanceCheck[] | null>(null)
+  const [changes, setChanges] = useState<InstanceChange[] | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
 
@@ -142,7 +192,14 @@ export default function InstanceDetailPage() {
     if (!id) return
     setErr(null)
     try {
-      setItem(await fetchInstance(id))
+      const [inst, hist, ch] = await Promise.all([
+        fetchInstance(id),
+        fetchHistory(Number(id), 200).catch(() => [] as InstanceCheck[]),
+        fetchChanges(Number(id), 50).catch(() => [] as InstanceChange[]),
+      ])
+      setItem(inst)
+      setHistory(hist)
+      setChanges(ch)
     } catch (e) {
       setErr(String(e))
     }
@@ -257,6 +314,62 @@ export default function InstanceDetailPage() {
           )}
         </div>
       </div>
+
+      <div className="section-title">
+        <h3>history</h3>
+        <span className="muted" style={{ fontSize: 12 }}>
+          {history?.length ?? 0} checks recorded
+        </span>
+      </div>
+      <div className="card" style={{ marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <HistorySpark rows={history} />
+        <div className="muted" style={{ fontSize: 11 }}>
+          oldest <span className="kbd">·</span> newest — green = alive, red = down. hover for timestamp.
+        </div>
+      </div>
+
+      {changes && changes.length > 0 && (
+        <>
+          <div className="section-title">
+            <h3>changes</h3>
+            <span className="muted" style={{ fontSize: 12 }}>
+              last {changes.length}
+            </span>
+          </div>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13 }}>
+              {changes.map((c) => (
+                <li key={c.id} style={{ marginBottom: 4 }}>
+                  <span className="muted mono" style={{ marginRight: 6 }}>
+                    {fmtRelative(c.at)}
+                  </span>
+                  {fmtAfter(c)}
+                  {c.kind === 'models_changed' &&
+                    (c.after?.added?.length || c.after?.removed?.length) && (
+                      <details style={{ display: 'inline-block', marginLeft: 6 }}>
+                        <summary className="muted" style={{ cursor: 'pointer', fontSize: 12 }}>
+                          show diff
+                        </summary>
+                        <div className="mono" style={{ fontSize: 11, marginTop: 4 }}>
+                          {(c.after?.added ?? []).map((m: string) => (
+                            <div key={'+' + m} style={{ color: 'var(--accent)' }}>
+                              + {m}
+                            </div>
+                          ))}
+                          {(c.after?.removed ?? []).map((m: string) => (
+                            <div key={'-' + m} style={{ color: 'var(--danger)' }}>
+                              − {m}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </>
+      )}
 
       <div className="section-title">
         <h3>models</h3>
