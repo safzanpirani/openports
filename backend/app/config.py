@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     CENSYS_API_SECRET: str | None = None
     CENSYS_API_KEY: str | None = None
     ZOOMEYE_API_KEY: str | None = None
+    NETLAS_API_KEY: str | None = None
     CENSYS_COOKIE: str | None = None
     ZOOMEYE_COOKIE: str | None = None
     TELEGRAM_BOT_TOKEN: str | None = None

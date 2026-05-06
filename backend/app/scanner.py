@@ -310,10 +310,10 @@ async def run_multi_source_scan(
     Sources without credentials are silently skipped. `sources=None` means
     "all enabled". Pass `["shodan"]` etc. to limit to a subset.
     """
-    from . import censys_client, zoomeye_client
+    from . import censys_client, netlas_client, zoomeye_client
 
     limit = limit or settings.SHODAN_LIMIT
-    chosen = sources or ["shodan", "censys", "zoomeye"]
+    chosen = sources or ["shodan", "censys", "zoomeye", "netlas"]
 
     queried = ", ".join(chosen)
     run = ScanRun(source=f"multi:{queried}", query="port:8188 OR port:11434", started_at=datetime.utcnow())
@@ -336,6 +336,8 @@ async def run_multi_source_scan(
             gathered.extend(censys_client.candidates_for_ports(limit=limit))
         if "zoomeye" in chosen and zoomeye_client._enabled():
             gathered.extend(zoomeye_client.candidates_for_ports(limit=limit))
+        if "netlas" in chosen and netlas_client._enabled():
+            gathered.extend(netlas_client.candidates_for_ports(limit=limit))
 
         # Dedupe by (ip, port) — keep the first (richest) record but union sources.
         by_target: dict[tuple[str, int], dict[str, Any]] = {}
