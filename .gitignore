@@ -13,6 +13,10 @@ venv/
 *.sqlite3
 *.db
 
+# secrets / env
+.env
+backend/.env
+
 # legacy secrets/caches
 legacy/.env
 legacy/__pycache__/
