@@ -14,6 +14,7 @@ export type Service =
   | 'llamacpp'
   | 'litellm'
   | 'tensorboard'
+  | 'CLIProxyAPI'
 
 export type Instance = {
   id: number
@@ -66,8 +67,12 @@ export type Stats = {
   stale_24h?: number
   last_run: ScanRun | null
   scheduler?: {
+    running?: boolean
     scan_interval_minutes: number
     recheck_interval_minutes: number
+    scan_sources?: string | string[]
+    next_scan_at?: string | null
+    next_recheck_at?: string | null
   }
 }
 

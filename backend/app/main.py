@@ -18,7 +18,7 @@ from .models import Alert, Instance, InstanceChange, InstanceCheck, ScanRun, Ser
 from .models_summary import model_names
 from .recheck import run_recheck
 from .scanner import run_multi_source_scan, run_shodan_scan
-from .scheduler import shutdown_scheduler, start_scheduler
+from .scheduler import get_scheduler_status, shutdown_scheduler, start_scheduler
 from .security import require_admin
 
 from pydantic import BaseModel
@@ -47,8 +47,12 @@ async def _telegram_handler(text_in: str) -> None:
         return
     cmd = parts[0].lower()
 
-    # New + standard commands handled in commands.py
-    if cmd in {"/help", "/ping", "/status", "/top", "/find", "/scan", "/recheck", "/diff", "/alerts"}:
+    # Delegate every slash-command to commands.py. handle_command raises
+    # NotImplementedError for anything it doesn't own (e.g. /scrape), which
+    # falls through to the legacy scraper handler below. A hardcoded allowlist
+    # used to live here and stranded newer commands (/show, /refresh, /runs,
+    # /catalog, /alert) — delegating unconditionally keeps the two in sync.
+    if cmd.startswith("/"):
         try:
             await cmds.handle_command(text_in)
             return
@@ -141,9 +145,32 @@ async def _start_telegram_poller() -> None:
     await poll_telegram_updates(_telegram_handler)
 
 
+def _reconcile_orphaned_runs() -> None:
+    """Close out ScanRun rows left open by a process that died mid-scan.
+
+    A killed worker leaves `finished_at IS NULL` forever, which makes the
+    "last run" health look like a scan is perpetually in progress. Anything
+    still open well past a plausible run time is marked interrupted on boot.
+    """
+    from .db import engine
+
+    cutoff = datetime.utcnow() - timedelta(minutes=30)
+    with Session(engine) as s:
+        orphans = s.exec(
+            select(ScanRun).where(ScanRun.finished_at.is_(None), ScanRun.started_at < cutoff)
+        ).all()
+        for r in orphans:
+            r.error = r.error or "interrupted (process restarted mid-scan)"
+            r.finished_at = datetime.utcnow()
+            s.add(r)
+        if orphans:
+            s.commit()
+
+
 @app.on_event("startup")
 def _startup() -> None:
     init_db()
+    _reconcile_orphaned_runs()
     asyncio.create_task(_start_telegram_poller())
     start_scheduler()
 
@@ -154,15 +181,53 @@ def _shutdown() -> None:
 
 
 _SORTABLE = {
+    # numeric / temporal
     "last_seen_at": Instance.last_seen_at,
     "first_seen_at": Instance.first_seen_at,
+    "last_checked_at": Instance.last_checked_at,
     "vram_total_gb": Instance.vram_total_gb,
     "vram_free_gb": Instance.vram_free_gb,
     "model_count": Instance.model_count,
     "max_model_params": Instance.max_model_params,
     "max_context": Instance.max_context,
     "node_count": Instance.node_count,
+    # text / categorical
+    "service": Instance.service,
+    "provider": Instance.provider,
+    "version": Instance.version,
+    "gpu": Instance.gpu_name,
+    "state": Instance.is_alive,
+    "ip": Instance.ip,
+    "port": Instance.port,
 }
+
+
+def _apply_sort(stmt, sort_by: str | None, sort_dir: str | None):
+    """Apply ORDER BY, supporting composite (host) and json (country) sorts.
+
+    Unknown keys silently fall back to last_seen_at to keep the public API
+    forgiving — same shape as the previous _SORTABLE.get() default.
+    """
+    asc = (sort_dir or "desc").lower() == "asc"
+    key = (sort_by or "last_seen_at").lower()
+
+    if key == "host":
+        # Composite: ip, then port. Ip is stored as text so this is lexicographic
+        # (10.0.0.1 sorts before 9.0.0.1) — fine for grouping by /8 and good enough.
+        return stmt.order_by(
+            Instance.ip.asc() if asc else Instance.ip.desc(),
+            Instance.port.asc() if asc else Instance.port.desc(),
+        )
+    if key == "country":
+        country_col = func.json_extract(Instance.shodan, "$.location.country_name")
+        # Nulls last regardless of direction.
+        return stmt.order_by(
+            country_col.is_(None),
+            country_col.asc() if asc else country_col.desc(),
+        )
+
+    col = _SORTABLE.get(key, Instance.last_seen_at)
+    return stmt.order_by(col.asc() if asc else col.desc())
 
 
 def _build_filtered_query(
@@ -229,13 +294,7 @@ def _build_filtered_query(
     if min_vram is not None and min_vram > 0:
         stmt = stmt.where(Instance.vram_total_gb >= min_vram)
 
-    sort_col = _SORTABLE.get(sort_by or "last_seen_at", Instance.last_seen_at)
-    if (sort_dir or "desc").lower() == "asc":
-        stmt = stmt.order_by(sort_col.asc())
-    else:
-        stmt = stmt.order_by(sort_col.desc())
-
-    return stmt
+    return _apply_sort(stmt, sort_by, sort_dir)
 
 
 @app.get("/api/instances/count")
@@ -434,24 +493,17 @@ async def refresh_instance(instance_id: int, session: Session = Depends(get_sess
         raise HTTPException(status_code=404, detail="Instance not found")
 
     import httpx
-    from .fingerprints import verify_comfyui, verify_ollama
+    from .fingerprints import verify_for_service
     from .scanner import _upsert_instance
 
     base_url = f"http://{inst.ip}:{inst.port}"
     timeout = httpx.Timeout(settings.HTTP_TIMEOUT_SECONDS)
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-        if inst.service == Service.comfyui:
-            ok, meta, models, version, gpu_name, metrics = await verify_comfyui(base_url, client)
-            updated, _created = _upsert_instance(
-                session, Service.comfyui, inst.ip, inst.port, ok, meta, models, version, gpu_name,
-                shodan_match=inst.shodan, metrics=metrics,
-            )
-        else:
-            ok, meta, models, version, metrics = await verify_ollama(base_url, client)
-            updated, _created = _upsert_instance(
-                session, Service.ollama, inst.ip, inst.port, ok, meta, models, version, None,
-                shodan_match=inst.shodan, metrics=metrics,
-            )
+        ok, meta, models, version, gpu_name, metrics = await verify_for_service(inst.service, base_url, client)
+        updated, _created = _upsert_instance(
+            session, inst.service, inst.ip, inst.port, ok, meta, models, version, gpu_name,
+            shodan_match=inst.shodan, metrics=metrics,
+        )
 
     return updated
 
@@ -488,6 +540,8 @@ def stats(session: Session = Depends(get_session)):
         select(ScanRun).order_by(ScanRun.started_at.desc()).limit(1)
     ).first()
 
+    sched = get_scheduler_status()
+
     return {
         "total": total,
         "alive": alive_count,
@@ -498,8 +552,12 @@ def stats(session: Session = Depends(get_session)):
         "stale_24h": stale_24h,
         "last_run": last_run,
         "scheduler": {
+            "running": sched["running"],
             "scan_interval_minutes": settings.SCAN_INTERVAL_MINUTES,
             "recheck_interval_minutes": settings.RECHECK_INTERVAL_MINUTES,
+            "scan_sources": settings.scan_sources_list or "all-enabled",
+            "next_scan_at": sched["jobs"].get("scan"),
+            "next_recheck_at": sched["jobs"].get("recheck"),
         },
     }
 

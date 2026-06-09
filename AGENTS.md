@@ -20,7 +20,15 @@ it ships a fastapi backend, a vite/react dashboard, and a telegram bot, all in o
 - never commit secrets, `.env`, `backend/.env`, or `*.db`.
 - when changing deploy behavior, update this file (and the two mirrors).
 
-### supported services (15)
+### ownership map
+
+| repo | owns | branches | deploy path | env source | smoke test |
+|------|------|----------|-------------|------------|------------|
+| `openports` | FastAPI scanner/API, Vite dashboard, Telegram bot, service fingerprints, candidate-source adapters, SQLite model/history/alerting | `main` is both default and current deploy branch; remote only exposes `main` | `docker compose up --build` from repo root, or backend/frontend run separately for dev | copy `.env.example` to `.env`; backend also supports `backend/.env` when running uvicorn from `backend/` | backend: `python -m compileall backend/app`; frontend: `cd frontend && npm run build` |
+
+mirrored docs: `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` must stay byte-identical. verify with `shasum AGENTS.md CLAUDE.md GEMINI.md`.
+
+### supported services (16)
 
 | service       | default port | verify\* | candidate fetch\*\* |
 |---------------|--------------|----------|---------------------|
@@ -39,6 +47,7 @@ it ships a fastapi backend, a vite/react dashboard, and a telegram bot, all in o
 | llamacpp      | 8080†        | ✅       | ✅                  |
 | litellm       | 4000         | ✅       | ✅                  |
 | tensorboard   | 6006         | ✅       | ✅                  |
+| CLIProxyAPI   | 8317         | ✅       | ✅                  |
 
 \* `backend/app/fingerprints.py:verify_<service>(base_url, client)` returns `(ok, meta, models, version, [gpu_name?], metrics)`.
 \*\* one `port:<n>` query per port via `candidates_for_ports()` in each `*_client.py`.
@@ -71,9 +80,9 @@ openports/
 │       ├── db.py                   (90)   ← engine + `_apply_lightweight_migrations()`
 │       ├── models.py               (150)  ← Service enum + Instance/InstanceCheck/InstanceChange/Alert/ScanRun
 │       ├── scanner.py              (483)  ← run_shodan_scan + run_multi_source_scan + _upsert_instance + _verify_one
-│       ├── recheck.py              (111)  ← run_recheck loop  ⚠ only handles comfyui/ollama
+│       ├── recheck.py              (~100) ← run_recheck loop; dispatches via fingerprints.verify_for_service
 │       ├── scheduler.py            (85)   ← apscheduler AsyncIOScheduler wiring
-│       ├── fingerprints.py         (891)  ← verify_<service> per service type
+│       ├── fingerprints.py         (~950) ← verify_<service> per type + verify_for_service dispatcher
 │       ├── shodan_client.py        (45)   ← uses official shodan pkg + SHODAN_API_KEY
 │       ├── censys_client.py        (125)  ← search v2 api, basic auth or PAT
 │       ├── zoomeye_client.py       (94)   ← api.zoomeye.ai/host/search
@@ -214,7 +223,7 @@ re-fingerprints **already-stored** instances (no new candidates from search engi
 - `only_stale`: skip rows whose `last_checked_at` is fresher than `RECHECK_STALE_AFTER_MINUTES`
 - `limit`: cap how many
 
-ordered oldest-checked-first. **⚠ current bug:** `_verify` only routes comfyui and ollama; the other 13 services are mis-routed through `verify_ollama`. fixing this means dispatching on `inst.service` to the right `verify_*` function. same bug exists in the `POST /api/instances/{id}/refresh` endpoint.
+ordered oldest-checked-first. dispatch is via `fingerprints.verify_for_service(inst.service, base_url, client)` — the same helper backs `POST /api/instances/{id}/refresh`. all 16 services are routed to their own verify_*.
 
 ### service-from-port mapping
 
@@ -232,6 +241,7 @@ ordered oldest-checked-first. **⚠ current bug:** `_verify` only routes comfyui
 30000 → sglang
 4000  → litellm
 6006  → tensorboard
+8317  → CLIProxyAPI
 ```
 
 returning `None` from `_service_from_port` causes the candidate to be skipped (logged at debug only).
@@ -296,7 +306,7 @@ all routes return json unless noted.
 
 | method | path                                      | notes |
 |--------|-------------------------------------------|-------|
-| POST   | `/api/instances/{id}/refresh`             | one-shot verify of one instance — ⚠ only routes comfyui/ollama (same bug as `recheck._verify`) |
+| POST   | `/api/instances/{id}/refresh`             | one-shot verify of one instance via `fingerprints.verify_for_service` |
 | POST   | `/api/scan/shodan?limit=N`                | trigger one shodan scan (background task) |
 | POST   | `/api/scan/multi?sources=shodan,censys,zoomeye,netlas&limit=N` | trigger a multi-source scan (background task). omit `sources` for "all enabled". |
 | POST   | `/api/scan/recheck?only_stale=true&only_alive=false&limit=N` | trigger recheck (background task) |
@@ -390,13 +400,15 @@ OLLAMA_SHOW_LIMIT=30              # cap on per-model /api/show calls during olla
 ### scheduler
 
 ```
-SCAN_INTERVAL_MINUTES=0           # 0 disables. shodan-only scan tick. off by default — credits are precious.
+SCAN_INTERVAL_MINUTES=0           # 0 disables. multi-source scan tick (all enabled sources, not just shodan). off by default — credits are precious.
+SCAN_SOURCES=                     # blank = all enabled. csv subset (e.g. "netlas") to keep the cron off shodan credits.
 RECHECK_INTERVAL_MINUTES=120      # current production setting
 RECHECK_STALE_AFTER_MINUTES=60    # only re-fingerprint instances older than this
 RECHECK_CONCURRENCY=25            # cap on parallel recheck fingerprints
+SCHEDULER_MISFIRE_GRACE_SECONDS=300  # how late a tick may fire before it's skipped. apscheduler's 1s default silently drops ticks when the loop is busy.
 ```
 
-apscheduler runs an `AsyncIOScheduler` inside the same event loop as fastapi. only registers a job when its interval > 0. uses `coalesce=True, max_instances=1` so missed ticks don't stack and concurrent runs don't overlap.
+apscheduler runs an `AsyncIOScheduler` inside the same event loop as fastapi. only registers a job when its interval > 0. job defaults are `misfire_grace_time=SCHEDULER_MISFIRE_GRACE_SECONDS, coalesce=True, max_instances=1` so a briefly-busy loop doesn't silently drop a tick, backed-up runs collapse into one, and concurrent runs don't overlap. sync jobs run in the loop's default thread pool (so `asyncio.run` inside them is fine and blocking source clients never freeze the api). job executed/missed/error/max-instances events are logged, and `/api/stats.scheduler` exposes `running` + `next_scan_at` / `next_recheck_at`.
 
 ---
 
@@ -555,7 +567,7 @@ npm run build              # output: frontend/dist/
 6. extend the `Service` union in `frontend/src/ui/api.ts`
 7. add the option to the `<select>` in `frontend/src/ui/ModelsPage.tsx`
 8. if the service exposes a model list, add a branch in `models_summary.model_names()` so the catalog and diff feeds work
-9. **don't forget**: update `recheck._verify` and `main.refresh_instance` to dispatch on `inst.service` for the new type (currently both hard-route to comfyui/ollama only)
+9. add the new enum branch to `fingerprints.verify_for_service` so recheck and per-instance refresh dispatch correctly
 
 ### adding a new candidate source
 
@@ -587,8 +599,10 @@ npm run build              # output: frontend/dist/
 | zoomeye 403 `service not available in your area` | hitting old `.org` endpoint | the client uses `https://api.zoomeye.ai/host/search`; verify if you copied an old client |
 | `func.cast(col, text("TEXT"))` raises | sqlalchemy 2.x doesn't accept stringly-typed casts | use `cast(col, Text)` from `sqlalchemy` |
 | cron tick logs but no scan happens | `SCAN_INTERVAL_MINUTES=0` (default) — only registers a job when > 0 | set `SCAN_INTERVAL_MINUTES=N` and restart |
+| scan cron fires some ticks but skips others | event loop was briefly busy at tick time; apscheduler's old 1s misfire grace dropped the run | fixed: job default is now `misfire_grace_time=SCHEDULER_MISFIRE_GRACE_SECONDS` (300s). bump it higher if you still see "missed its run time" warnings |
+| intermittent `database is locked` aborting a scan | concurrent writes from the scan worker thread + api reads on stock sqlite | fixed: db.py sets `journal_mode=WAL` + `busy_timeout=30000` on connect. confirm with `sqlite3 data/openports.db "PRAGMA journal_mode"` → `wal` |
+| scheduled scan returns 0 even though netlas works | the cron used to query shodan only | fixed: the scheduled job now runs `run_multi_source_scan` across all enabled sources (override with `SCAN_SOURCES`) |
 | `_apply_lightweight_migrations` warns `migrate <table>.<col> failed` | sqlite can't add a column with a non-trivial default or a non-rendered type | drop the default in the model, or add the column manually with `sqlite3 data/openports.db "ALTER TABLE …"` |
-| recheck reports verified=N for non-comfyui/ollama services but they all show `is_alive=false` | recheck.\_verify only routes those two — every other service falls through to `verify_ollama` which fails | open issue (see § 4 recheck loop note) |
 | `discovery_sources` is `null` on instances inserted before round-3 | older rows predate the column | running a `/api/scan/multi` will populate it on next sighting |
 
 ### health check after any deploy

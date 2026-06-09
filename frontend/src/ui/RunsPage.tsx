@@ -1,9 +1,22 @@
 import { useEffect, useState } from 'react'
-import { ScanRun, fetchRuns, triggerShodanScan } from './api'
-import { adminToken, fmtRelative, fmtTime, setAdminToken } from './format'
+import { ScanRun, Stats, fetchRuns, fetchStats, triggerMultiScan, triggerShodanScan } from './api'
+import { adminToken, fmtEta, fmtRelative, fmtTime, setAdminToken } from './format'
+
+function sourcesLabel(s?: string | string[]): string {
+  if (!s) return 'all enabled'
+  if (Array.isArray(s)) return s.length ? s.join(', ') : 'all enabled'
+  return s === 'all-enabled' ? 'all enabled' : s
+}
+
+function intervalLabel(min?: number): string {
+  if (!min || min <= 0) return 'off'
+  if (min % 60 === 0) return `every ${min / 60}h`
+  return `every ${min}m`
+}
 
 export default function RunsPage() {
   const [runs, setRuns] = useState<ScanRun[] | null>(null)
+  const [stats, setStats] = useState<Stats | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [token, setToken] = useState<string>(() => adminToken())
   const [scanning, setScanning] = useState(false)
@@ -11,7 +24,9 @@ export default function RunsPage() {
   async function refresh() {
     setErr(null)
     try {
-      setRuns(await fetchRuns())
+      const [r, s] = await Promise.all([fetchRuns(), fetchStats()])
+      setRuns(r)
+      setStats(s)
     } catch (e) {
       setErr(String(e))
     }
@@ -21,11 +36,24 @@ export default function RunsPage() {
     refresh()
   }, [])
 
-  async function onTrigger() {
+  // While a scan is in-flight (background task, finished_at still null), poll so
+  // the table and next-run countdown stay live without a manual refresh.
+  const hasRunning = runs?.some((r) => !r.finished_at) ?? false
+  useEffect(() => {
+    if (!hasRunning) return
+    const id = setInterval(refresh, 3000)
+    return () => clearInterval(id)
+  }, [hasRunning])
+
+  async function onTrigger(kind: 'multi' | 'shodan') {
     setScanning(true)
     setErr(null)
     try {
-      await triggerShodanScan(token || undefined)
+      if (kind === 'multi') await triggerMultiScan({}, token || undefined)
+      else await triggerShodanScan(token || undefined)
+      // The scan runs as a background task; give it a beat to insert its ScanRun
+      // row, then refresh (polling takes over while it's still running).
+      await new Promise((r) => setTimeout(r, 800))
       await refresh()
     } catch (e) {
       setErr(String(e))
@@ -48,17 +76,95 @@ export default function RunsPage() {
     return `${m}m ${s % 60}s`
   }
 
+  const sched = stats?.scheduler
+  const lastRun = stats?.last_run
+  const lastRunErr = lastRun?.error
+  let healthCls = 'idle'
+  let healthLabel = 'idle'
+  if (sched?.running) {
+    healthCls = 'ok'
+    healthLabel = 'running'
+  }
+  if (lastRunErr) {
+    healthCls = 'err'
+    healthLabel = 'last run errored'
+  }
+
   return (
     <div>
       <div className="section-title">
         <h2>scans</h2>
         <div className="row">
-          <button className="primary" onClick={onTrigger} disabled={scanning}>
-            {scanning ? <><span className="spinner" />triggering</> : 'trigger shodan scan'}
+          <button className="primary" onClick={() => onTrigger('multi')} disabled={scanning}>
+            {scanning ? (
+              <>
+                <span className="spinner" />
+                scanning…
+              </>
+            ) : (
+              'scan now'
+            )}
+          </button>
+          <button onClick={() => onTrigger('shodan')} disabled={scanning} title="query Shodan only">
+            shodan only
           </button>
           <button onClick={refresh}>↻ refresh</button>
         </div>
       </div>
+
+      {sched && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div className="stats-grid" style={{ marginBottom: 0 }}>
+            <div className="stat">
+              <div className="label">scheduler</div>
+              <div className="value">
+                <span className="health-dot-row">
+                  <span className={`health-dot ${healthCls}`} />
+                  {healthLabel}
+                </span>
+              </div>
+            </div>
+            <div className="stat">
+              <div className="label">scan loop</div>
+              <div className="value">{intervalLabel(sched.scan_interval_minutes)}</div>
+              <div className="sub">
+                {sched.scan_interval_minutes > 0
+                  ? sched.next_scan_at
+                    ? `next ${fmtEta(sched.next_scan_at)}`
+                    : '—'
+                  : 'set SCAN_INTERVAL_MINUTES to enable'}
+              </div>
+            </div>
+            <div className="stat">
+              <div className="label">recheck loop</div>
+              <div className="value">{intervalLabel(sched.recheck_interval_minutes)}</div>
+              <div className="sub">
+                {sched.recheck_interval_minutes > 0
+                  ? sched.next_recheck_at
+                    ? `next ${fmtEta(sched.next_recheck_at)}`
+                    : '—'
+                  : 'set RECHECK_INTERVAL_MINUTES to enable'}
+              </div>
+            </div>
+            <div className="stat">
+              <div className="label">scan sources</div>
+              <div className="value" style={{ fontSize: 15 }}>
+                {sourcesLabel(sched.scan_sources)}
+              </div>
+              <div className="sub">
+                {lastRun ? (
+                  <>
+                    last {lastRunErr ? 'errored' : lastRun.finished_at ? 'ok' : 'running…'} ·{' '}
+                    {fmtRelative(lastRun.started_at)}
+                  </>
+                ) : (
+                  'no runs yet'
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div className="row" style={{ gap: 10 }}>

@@ -54,6 +54,23 @@ export function fmtRelative(s?: string | null): string {
   }
 }
 
+export function fmtEta(s?: string | null): string {
+  if (!s) return '—'
+  try {
+    const diffMs = new Date(s).getTime() - Date.now()
+    if (diffMs <= 0) return 'due'
+    const sec = Math.round(diffMs / 1000)
+    if (sec < 60) return `in ${sec}s`
+    const min = Math.round(sec / 60)
+    if (min < 60) return `in ${min}m`
+    const hr = Math.round(min / 60)
+    if (hr < 48) return `in ${hr}h`
+    return `in ${Math.round(hr / 24)}d`
+  } catch {
+    return s
+  }
+}
+
 export function fmtNumber(n: number | null | undefined, digits = 0): string {
   if (n === null || n === undefined) return '—'
   return n.toLocaleString(undefined, {

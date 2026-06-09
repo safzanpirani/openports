@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from sqlalchemy import event
 from sqlmodel import SQLModel, create_engine, Session
 
 from .config import settings
@@ -37,6 +38,27 @@ engine = create_engine(
     echo=False,
     connect_args=_sqlite_connect_args(settings.DATABASE_URL),
 )
+
+
+if settings.DATABASE_URL.startswith("sqlite"):
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_pragmas(dbapi_conn, _record):  # noqa: ANN001
+        """Make SQLite tolerate concurrent readers/writers.
+
+        Scheduled scans run in a background worker thread and commit many rows
+        while the API serves reads on other threads. Without these pragmas the
+        default zero busy-timeout surfaces intermittent `database is locked`
+        errors that abort a scan mid-run. WAL lets readers and a single writer
+        proceed in parallel; `busy_timeout` makes a blocked writer wait instead
+        of failing immediately.
+        """
+        cur = dbapi_conn.cursor()
+        try:
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=30000")
+            cur.execute("PRAGMA synchronous=NORMAL")
+        finally:
+            cur.close()
 
 
 def init_db() -> None:

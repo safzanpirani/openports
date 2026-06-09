@@ -62,6 +62,21 @@ class Settings(BaseSettings):
     RECHECK_STALE_AFTER_MINUTES: int = 60
     # Cap concurrent re-fingerprints (uses HTTP, so be polite).
     RECHECK_CONCURRENCY: int = 25
+    # Which sources the scheduled scan queries. Comma-separated subset of
+    # shodan,censys,zoomeye,netlas. Blank/None = "all enabled" (recommended —
+    # the cron stays useful even if one source's credits run out).
+    SCAN_SOURCES: str | None = None
+    # How long a scheduler tick may be delayed before APScheduler treats it as
+    # "missed" and skips it. APScheduler's 1s default silently drops ticks
+    # whenever the event loop is briefly busy, which is the usual reason a cron
+    # "runs inconsistently". Keep this generous.
+    SCHEDULER_MISFIRE_GRACE_SECONDS: int = 300
+
+    @property
+    def scan_sources_list(self) -> list[str] | None:
+        if not self.SCAN_SOURCES or not self.SCAN_SOURCES.strip():
+            return None
+        return [s.strip().lower() for s in self.SCAN_SOURCES.split(",") if s.strip()]
 
 
 settings = Settings()

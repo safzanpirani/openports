@@ -454,6 +454,11 @@ table.data td.num {
   color: #8a5a00;
   border-color: transparent;
 }
+.badge.svc-CLIProxyAPI {
+  background: #dff4f2;
+  color: #13645f;
+  border-color: transparent;
+}
 :root.dark .badge.svc-comfyui {
   background: #2a1c4a;
   color: #c4adff;
@@ -473,6 +478,39 @@ table.data td.num {
 :root.dark .badge.svc-jupyter {
   background: #2e2410;
   color: #ecd082;
+}
+:root.dark .badge.svc-CLIProxyAPI {
+  background: #0f2d2a;
+  color: #85d8ce;
+}
+
+.health-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  margin-left: 6px;
+  vertical-align: middle;
+  background: var(--muted);
+}
+.health-dot.ok {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.health-dot.idle {
+  background: var(--p-unknown);
+}
+.health-dot.err {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px var(--danger-soft);
+}
+.health-dot-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.health-dot-row .health-dot {
+  margin-left: 0;
 }
 
 .kv {

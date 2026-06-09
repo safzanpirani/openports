@@ -5,8 +5,42 @@ import InstancesPage from './InstancesPage'
 import InstanceDetailPage from './InstanceDetailPage'
 import ModelsPage from './ModelsPage'
 import RunsPage from './RunsPage'
+import { Stats, fetchStats } from './api'
 
 type Theme = 'light' | 'dark'
+
+function SchedulerDot() {
+  const [stats, setStats] = useState<Stats | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    const load = () =>
+      fetchStats()
+        .then((s) => alive && setStats(s))
+        .catch(() => {})
+    load()
+    const id = setInterval(load, 30000)
+    return () => {
+      alive = false
+      clearInterval(id)
+    }
+  }, [])
+
+  if (!stats?.scheduler) return null
+  const sched = stats.scheduler
+  const lastErr = stats.last_run?.error
+  let cls = 'idle'
+  let title = 'scheduler idle — no scan/recheck loop running'
+  if (sched.running) {
+    cls = 'ok'
+    title = 'scheduler running'
+  }
+  if (lastErr) {
+    cls = 'err'
+    title = `last run errored: ${lastErr}`
+  }
+  return <span className={`health-dot ${cls}`} title={title} />
+}
 
 function applyTheme(t: Theme) {
   const el = document.documentElement
@@ -47,6 +81,7 @@ export default function App() {
           </NavLink>
           <NavLink to="/runs" className={({ isActive }) => (isActive ? 'active plain' : 'plain')}>
             scans
+            <SchedulerDot />
           </NavLink>
         </nav>
         <div className="app-spacer" />
