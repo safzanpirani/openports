@@ -26,10 +26,34 @@ def _scan_job() -> None:
     pool, so we own a fresh event loop here via ``asyncio.run`` and the sync
     source clients block this worker thread, not the API's event loop.
     """
-    from sqlmodel import Session
+    from datetime import datetime, timedelta
+
+    from sqlmodel import Session, select
 
     from .db import engine
+    from .models import ScanRun
     from .scanner import run_multi_source_scan
+
+    # Overlap guard: if a multi scan is still in flight, don't pile a second one
+    # on top — concurrent scans contend for the sqlite write lock and each other.
+    # A healthy scan finishes in minutes, so an unfinished row older than the
+    # 30-min staleness window is treated as dead (it'll be reconciled on the next
+    # restart) and does NOT block — only a genuinely-recent run does.
+    with Session(engine) as s:
+        cutoff = datetime.utcnow() - timedelta(minutes=30)
+        inflight = s.exec(
+            select(ScanRun).where(
+                ScanRun.source.like("multi:%"),
+                ScanRun.finished_at.is_(None),
+                ScanRun.started_at >= cutoff,
+            )
+        ).first()
+    if inflight is not None:
+        log.warning(
+            "scheduled scan skipped — multi scan #%s still running (since %s)",
+            inflight.id, inflight.started_at,
+        )
+        return
 
     sources = settings.scan_sources_list
     log.info("scheduled scan tick (sources=%s)", ",".join(sources) if sources else "all-enabled")

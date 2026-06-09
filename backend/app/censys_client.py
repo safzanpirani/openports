@@ -87,7 +87,9 @@ def _compact(hit: dict[str, Any], port: int) -> dict[str, Any]:
     }
 
 
-def _search(query: str, port: int, per_page: int) -> list[dict[str, Any]]:
+def _search(query: str, port: int, per_page: int) -> list[dict[str, Any]] | None:
+    """Return candidates, or ``None`` on a hard auth/credit failure so the
+    caller can stop querying the remaining ports."""
     if not _enabled():
         return []
     payload = {"q": query, "per_page": min(max(per_page, 1), 100)}
@@ -95,6 +97,9 @@ def _search(query: str, port: int, per_page: int) -> list[dict[str, Any]]:
     try:
         with httpx.Client(timeout=15.0) as client:
             r = client.post(CENSYS_HOSTS_SEARCH, params=payload, **_auth_kwargs())
+            if r.status_code in (401, 402, 403):
+                log.warning("censys auth/credit failure (%s): %s", r.status_code, r.text[:200])
+                return None
             if r.status_code != 200:
                 log.warning("censys %s -> %s: %s", query, r.status_code, r.text[:300])
                 return []
@@ -121,5 +126,9 @@ def candidates_for_ports(limit: int) -> list[dict[str, Any]]:
         return []
     out: list[dict[str, Any]] = []
     for port in SUPPORTED_PORTS:
-        out.extend(_search(f"services.port: {port}", port=port, per_page=limit))
+        res = _search(f"services.port: {port}", port=port, per_page=limit)
+        if res is None:
+            log.warning("censys: stopping scan early (credentials rejected)")
+            return out
+        out.extend(res)
     return out

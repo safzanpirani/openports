@@ -53,7 +53,12 @@ def _compact(rec: dict[str, Any], port: int) -> dict[str, Any]:
     }
 
 
-def _search(query: str, port: int, page: int = 1) -> list[dict[str, Any]]:
+def _search(query: str, port: int, page: int = 1) -> list[dict[str, Any]] | None:
+    """Return candidates, or ``None`` to signal a hard auth/credit failure.
+
+    ``None`` tells ``candidates_for_ports`` to stop — there's no point hammering
+    the remaining ports/pages when the key is unauthorized or out of credits.
+    """
     if not _enabled():
         return []
     headers = {"API-KEY": settings.ZOOMEYE_API_KEY or ""}
@@ -62,6 +67,9 @@ def _search(query: str, port: int, page: int = 1) -> list[dict[str, Any]]:
     try:
         with httpx.Client(timeout=15.0) as client:
             r = client.get(ZOOMEYE_HOST_SEARCH, params=params, headers=headers)
+            if r.status_code in (401, 402, 403):
+                log.warning("zoomeye auth/credit failure (%s): %s", r.status_code, r.text[:200])
+                return None
             if r.status_code != 200:
                 log.warning("zoomeye %s -> %s: %s", query, r.status_code, r.text[:300])
                 return []
@@ -90,5 +98,9 @@ def candidates_for_ports(limit: int) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for port in SUPPORTED_PORTS:
         for p in range(1, pages + 1):
-            out.extend(_search(f"port:{port}", port=port, page=p))
+            res = _search(f"port:{port}", port=port, page=p)
+            if res is None:
+                log.warning("zoomeye: stopping scan early (key unauthorized or out of credits)")
+                return out
+            out.extend(res)
     return out

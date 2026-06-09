@@ -135,7 +135,10 @@ def evaluate_alerts(
             filt = a.filter_json or {}
             kind = a.kind
 
-            if kind == "new_instance" and not is_first_seen:
+            # Only alert on a genuinely new *live* instance. A multi-source scan
+            # inserts many dead/unverified (ip, port) rows; firing on those turns
+            # one scan into hundreds of notifications.
+            if kind == "new_instance" and (not is_first_seen or not inst.is_alive):
                 continue
             if kind == "alive_changed":
                 if alive_flipped is None:

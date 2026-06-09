@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime
 from typing import Any
 
@@ -350,6 +351,7 @@ async def run_multi_source_scan(
 
     try:
         # Each source returns compact-shape dicts with `_source` set.
+        t_fetch = time.monotonic()
         gathered: list[dict[str, Any]] = []
         if "shodan" in chosen and settings.SHODAN_API_KEY:
             try:
@@ -384,16 +386,28 @@ async def run_multi_source_scan(
         run.candidates = len(by_target)
         session.add(run)
         session.commit()
+        log.info(
+            "multi-scan fetch done in %.1fs: %d raw, %d unique targets",
+            time.monotonic() - t_fetch, len(gathered), len(by_target),
+        )
 
+        t_verify = time.monotonic()
         sem = asyncio.Semaphore(settings.VERIFY_CONCURRENCY)
+        deadline = settings.VERIFY_DEADLINE_SECONDS
         tasks = []
         for (ip, port), m in by_target.items():
             service = _service_from_port(port)
             if not service:
                 continue
-            tasks.append(_verify_one(sem, ip, port, m))
+            tasks.append(asyncio.wait_for(_verify_one(sem, ip, port, m), timeout=deadline))
         results = await asyncio.gather(*tasks, return_exceptions=True)
+        timed_out = sum(1 for r in results if isinstance(r, asyncio.TimeoutError))
+        log.info(
+            "multi-scan verify done in %.1fs: %d results, %d timed out",
+            time.monotonic() - t_verify, len(results), timed_out,
+        )
 
+        t_upsert = time.monotonic()
         verified = 0
         new_instances = 0
         junk_skipped = 0
@@ -431,6 +445,11 @@ async def run_multi_source_scan(
                     f"new {service.value}: {ip}:{port}\nversion={version or 'unknown'} gpu={gpu_name or 'unknown'} via {','.join(sources) or 'shodan'}"
                 )
 
+        log.info(
+            "multi-scan upsert done in %.1fs: verified=%d new=%d junk=%d",
+            time.monotonic() - t_upsert, verified, new_instances, junk_skipped,
+        )
+
         run.verified = verified
         run.new_instances = new_instances
         if junk_skipped:
@@ -464,6 +483,7 @@ async def run_shodan_scan(session: Session, limit: int | None = None) -> ScanRun
         session.commit()
 
         sem = asyncio.Semaphore(settings.VERIFY_CONCURRENCY)
+        deadline = settings.VERIFY_DEADLINE_SECONDS
 
         tasks = []
         seen_targets: set[tuple[str, int]] = set()
@@ -479,7 +499,7 @@ async def run_shodan_scan(session: Session, limit: int | None = None) -> ScanRun
             if target in seen_targets:
                 continue
             seen_targets.add(target)
-            tasks.append(_verify_one(sem, ip, port, m))
+            tasks.append(asyncio.wait_for(_verify_one(sem, ip, port, m), timeout=deadline))
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 

@@ -41,7 +41,9 @@ export default function RunsPage() {
   const hasRunning = runs?.some((r) => !r.finished_at) ?? false
   useEffect(() => {
     if (!hasRunning) return
-    const id = setInterval(refresh, 3000)
+    // Scans can run for many minutes; /api/stats scans the whole table, so keep
+    // this gentle. 10s is responsive enough for a background job.
+    const id = setInterval(refresh, 10000)
     return () => clearInterval(id)
   }, [hasRunning])
 

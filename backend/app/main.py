@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
+import logging
 from datetime import datetime, timedelta
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
@@ -167,8 +168,27 @@ def _reconcile_orphaned_runs() -> None:
             s.commit()
 
 
+def _configure_logging() -> None:
+    """Make the app's own INFO logs visible.
+
+    Uvicorn only configures its own loggers, so `openports.*` records fall back
+    to the root WARNING level — which silently hid every scheduler/scan/recheck
+    INFO line (scan ticks, per-phase timing, next-run times). Attach a dedicated
+    INFO handler to the `openports` logger so that operational detail surfaces.
+    """
+    app_log = logging.getLogger("openports")
+    app_log.setLevel(logging.INFO)
+    app_log.propagate = False
+    if not any(getattr(h, "_openports", False) for h in app_log.handlers):
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+        handler._openports = True  # type: ignore[attr-defined]
+        app_log.addHandler(handler)
+
+
 @app.on_event("startup")
 def _startup() -> None:
+    _configure_logging()
     init_db()
     _reconcile_orphaned_runs()
     asyncio.create_task(_start_telegram_poller())

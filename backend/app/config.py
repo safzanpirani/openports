@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     VERIFY_CONCURRENCY: int = 50
     HTTP_TIMEOUT_SECONDS: float = 4.0
     OLLAMA_SHOW_LIMIT: int = 30
+    # Hard ceiling on how long a single (ip, port) fingerprint may run, across
+    # all its sub-requests. httpx's timeout is per socket-operation, so a host
+    # that drip-feeds bytes can pin a verify (and its concurrency slot) forever
+    # — which is what made full scans run for hours. wait_for enforces a total.
+    VERIFY_DEADLINE_SECONDS: float = 45.0
 
     # Scheduler
     # 0 disables that loop; use manual trigger.
