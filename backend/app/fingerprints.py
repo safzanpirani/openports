@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, Optional
 
 import httpx
 
 from .config import settings
+from .models import Service
+
+
+log = logging.getLogger("openports.fingerprints")
 
 
 def _sanitize_gpu_name(name: str) -> str:
@@ -749,6 +754,97 @@ async def verify_litellm(base_url: str, client: httpx.AsyncClient) -> tuple[bool
     return ok, metadata, models, version, metrics
 
 
+def _openai_compat_model_entries(data: Any) -> list[Any] | None:
+    """Return model entries from common OpenAI-compatible model-list shapes."""
+    if isinstance(data, dict):
+        entries = data.get("data")
+        if isinstance(entries, list):
+            return entries
+        entries = data.get("models")
+        if isinstance(entries, list):
+            return entries
+    if isinstance(data, list):
+        return data
+    return None
+
+
+def _model_entry_name(entry: Any) -> str | None:
+    if isinstance(entry, str):
+        return entry
+    if not isinstance(entry, dict):
+        return None
+    for key in ("id", "model", "model_id", "name"):
+        val = entry.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
+def _looks_like_llm_models_payload(data: Any, entries: list[Any]) -> bool:
+    if isinstance(data, dict) and data.get("object") == "list" and isinstance(data.get("data"), list):
+        return True
+    for entry in entries:
+        if _model_entry_name(entry):
+            return True
+        if isinstance(entry, dict) and entry.get("object") == "model":
+            return True
+    return False
+
+
+def _model_family(name: str) -> str:
+    n = name.lower()
+    if "claude" in n or "anthropic" in n:
+        return "claude"
+    if "gpt" in n or "openai" in n or n.startswith(("o1", "o3", "o4")):
+        return "gpt"
+    return "misc"
+
+
+async def verify_cliproxyapi(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
+    """CLIProxyAPI on :8317.
+
+    Positive signal is a public OpenAI-compatible/provider-like `/v1/models`
+    response. The route is intentionally broad: if it returns a recognizable
+    model-list shape, we keep it, whether the model IDs look like claude, gpt,
+    or miscellaneous provider names.
+    """
+    metadata: dict[str, Any] | None = None
+    models: dict[str, Any] | None = None
+    version: str | None = None
+    last_error: str | None = None
+
+    try:
+        r = await client.get(f"{base_url}/v1/models")
+        if r.status_code == 200:
+            data = r.json()
+            entries = _openai_compat_model_entries(data)
+            if entries is not None and _looks_like_llm_models_payload(data, entries):
+                models = {"data": entries}
+                names = [name for entry in entries if (name := _model_entry_name(entry))]
+                metadata = {
+                    "product": "CLIProxyAPI",
+                    "route": "/v1/models",
+                    "openai_compatible": True,
+                    "model_families": sorted({_model_family(name) for name in names}),
+                }
+        else:
+            last_error = f"v1_models_http_{r.status_code}"
+    except Exception as e:
+        last_error = type(e).__name__
+
+    model_count = None
+    if isinstance(models, dict) and isinstance(models.get("data"), list):
+        model_count = len(models["data"])
+
+    metrics = {
+        "vram_total_gb": None, "vram_free_gb": None, "ram_total_gb": None, "ram_free_gb": None,
+        "model_count": model_count, "node_count": None, "max_model_params": None, "max_context": None,
+    }
+    if metadata is None and last_error:
+        metrics["last_error"] = last_error
+    return metadata is not None, metadata, models, version, metrics
+
+
 async def verify_tensorboard(base_url: str, client: httpx.AsyncClient) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, dict[str, Any]]:
     """Tensorboard. Default :6006. Signals an active training job nearby."""
     metadata: dict[str, Any] | None = None
@@ -873,7 +969,7 @@ async def verify_ollama(base_url: str, client: httpx.AsyncClient) -> tuple[bool,
                             val = float(psize_str[:-1])
                             if max_params is None or val > max_params:
                                 max_params = val
-                        except:
+                        except Exception:
                             pass
 
     metrics = {
@@ -889,3 +985,158 @@ async def verify_ollama(base_url: str, client: httpx.AsyncClient) -> tuple[bool,
 
     return ok, metadata, models, version, metrics
 
+
+def classify_junk(body: str | None, status: int | None, length: int | None = None) -> str | None:
+    """Match a host's root-page response against known non-AI app signatures.
+
+    Returns a short tag (e.g. "iis_dir_listing", "totvs", "zabbix") when the
+    response is recognised as junk that should not be tracked as an AI service,
+    or None when the response is unknown (could be a real service, or just an
+    unfamiliar one — caller should not treat None as "junk").
+
+    Signatures are derived from observed pollution in the candidate pool:
+    Tencent Cloud blocks returning IIS dir listings, Brazilian TOTVS ERPs,
+    Zabbix-themed monitoring panels, NF-validation apps, generic IIS 404s,
+    and Google login redirects. Be conservative — false positives cost real
+    instances; false negatives just keep noise.
+    """
+
+    if not body:
+        return None
+    bl = body.lower()
+
+    # Brazilian ERP + tax apps that share ports 8080/8888/8000 with AI services
+    if "totvs" in bl:
+        return "totvs"
+    if "validação de nf" in bl or "validacao de nf" in bl:
+        return "nf_validation"
+
+    # Zabbix monitoring (matched in two forms — Zabbix SIA copyright + meta tag)
+    if "zabbix sia" in bl or 'content="zabbix' in bl or "zabbix.com" in bl:
+        return "zabbix"
+
+    # Google sign-in landing page
+    if "google-signin-client_id" in bl or "accounts.google.com/o/oauth2" in bl:
+        return "google_signin"
+
+    # Generic IIS 404 — very specific string, low false-positive risk
+    if "404 - file or directory not found" in bl:
+        return "iis_404"
+
+    # IIS directory listing — status 200, contains <H1>{ip} - /</H1> and <dir> entries
+    if status == 200 and "<h1>" in bl and "&lt;dir&gt;" in bl and "<a href=" in bl:
+        return "iis_dir_listing"
+
+    # WordPress / generic CMS leaking into the AI port pool
+    if 'name="generator" content="wordpress' in bl:
+        return "wordpress"
+
+    # cPanel / Plesk / Webmin admin panels
+    if "cpanel" in bl and "<title>cpanel" in bl:
+        return "cpanel"
+    if "plesk-error" in bl or "plesk default page" in bl:
+        return "plesk"
+
+    return None
+
+
+async def _probe_root_for_junk(client: httpx.AsyncClient, base_url: str) -> str | None:
+    """Single GET against root URL; classify the response. Tolerant of failures."""
+    try:
+        r = await client.get(base_url, timeout=4.0)
+    except Exception:
+        return None
+    body = r.text or ""
+    return classify_junk(body[:5000], r.status_code, len(r.content))
+
+
+async def verify_for_service(
+    service: Service, base_url: str, client: httpx.AsyncClient
+) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, str | None, dict[str, Any]]:
+    """Dispatch to the right verify_* by known service.
+
+    Returns the 6-tuple shape (ok, meta, models, version, gpu_name, metrics).
+    Adapters wrap the 5-tuple variants by inserting gpu_name=None.
+    Used by recheck and per-instance refresh, where the service is already known
+    and no port-cascade is needed (unlike scanner._verify_one).
+    Unsupported services return ok=False with metrics["last_error"] set so callers
+    can persist the failed check instead of dropping the target.
+
+    On a failed verify, also runs a junk-classification probe against the root URL.
+    If a known non-AI signature matches, sets metrics["junk_signature"] and
+    metrics["last_error"] = f"junk:<sig>" so callers can refuse to insert garbage.
+    """
+
+    ok, meta, models, version, gpu_name, metrics = await _dispatch_verify(service, base_url, client)
+
+    if not ok:
+        sig = await _probe_root_for_junk(client, base_url)
+        if sig:
+            new_metrics = dict(metrics or {})
+            new_metrics["junk_signature"] = sig
+            new_metrics["last_error"] = f"junk:{sig}"
+            metrics = new_metrics
+
+    return ok, meta, models, version, gpu_name, metrics
+
+
+async def _dispatch_verify(
+    service: Service, base_url: str, client: httpx.AsyncClient
+) -> tuple[bool, dict[str, Any] | None, dict[str, Any] | None, str | None, str | None, dict[str, Any]]:
+    if service == Service.comfyui:
+        return await verify_comfyui(base_url, client)
+    if service == Service.sdwebui:
+        return await verify_sdwebui(base_url, client)
+    if service == Service.ollama:
+        ok, meta, models, version, metrics = await verify_ollama(base_url, client)
+        return ok, meta, models, version, None, metrics
+    if service == Service.openwebui:
+        ok, meta, models, version, metrics = await verify_openwebui(base_url, client)
+        return ok, meta, models, version, None, metrics
+    if service == Service.jupyter:
+        ok, meta, models, version, metrics = await verify_jupyter(base_url, client)
+        return ok, meta, models, version, None, metrics
+    if service == Service.vllm:
+        ok, meta, models, version, metrics = await verify_vllm(base_url, client)
+        return ok, meta, models, version, None, metrics
+    if service == Service.tgi:
+        ok, meta, models, version, metrics = await verify_tgi(base_url, client)
+        return ok, meta, models, version, None, metrics
+    if service == Service.triton:
+        ok, meta, models, version, metrics = await verify_triton(base_url, client)
+        return ok, meta, models, version, None, metrics
+    if service == Service.ray:
+        ok, meta, models, version, metrics = await verify_ray(base_url, client)
+        return ok, meta, models, version, None, metrics
+    if service == Service.tgwebui:
+        ok, meta, models, version, metrics = await verify_tgwebui(base_url, client)
+        return ok, meta, models, version, None, metrics
+    if service == Service.lmstudio:
+        ok, meta, models, version, metrics = await verify_lmstudio(base_url, client)
+        return ok, meta, models, version, None, metrics
+    if service == Service.sglang:
+        ok, meta, models, version, metrics = await verify_sglang(base_url, client)
+        return ok, meta, models, version, None, metrics
+    if service == Service.llamacpp:
+        ok, meta, models, version, metrics = await verify_llamacpp(base_url, client)
+        return ok, meta, models, version, None, metrics
+    if service == Service.litellm:
+        ok, meta, models, version, metrics = await verify_litellm(base_url, client)
+        return ok, meta, models, version, None, metrics
+    if service == Service.CLIProxyAPI:
+        ok, meta, models, version, metrics = await verify_cliproxyapi(base_url, client)
+        return ok, meta, models, version, None, metrics
+    if service == Service.tensorboard:
+        ok, meta, models, version, metrics = await verify_tensorboard(base_url, client)
+        return ok, meta, models, version, None, metrics
+
+    service_name = service.value if isinstance(service, Service) else str(service)
+    log.error("unsupported service in verify_for_service: %s", service_name)
+    return (
+        False,
+        {"error": "unsupported_service", "service": service_name},
+        None,
+        None,
+        None,
+        {"last_error": "unsupported_service"},
+    )

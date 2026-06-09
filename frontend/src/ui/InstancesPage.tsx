@@ -37,6 +37,18 @@ type SortKey =
   | 'max_model_params'
   | 'max_context'
   | 'node_count'
+  | 'service'
+  | 'host'
+  | 'provider'
+  | 'country'
+  | 'state'
+  | 'version'
+  | 'gpu'
+
+// Text columns default to ascending on first click (A→Z feels right). State and numerics default to descending.
+const TEXT_SORT_KEYS: ReadonlySet<SortKey> = new Set([
+  'service', 'host', 'provider', 'country', 'version', 'gpu',
+])
 
 const PAGE_SIZES = [50, 100, 200, 500] as const
 
@@ -407,7 +419,7 @@ export default function InstancesPage() {
 
   function toggleSort(k: SortKey) {
     if (filters.sortBy === k) setFilters({ sortDir: filters.sortDir === 'asc' ? 'desc' : 'asc' })
-    else setFilters({ sortBy: k, sortDir: 'desc' })
+    else setFilters({ sortBy: k, sortDir: TEXT_SORT_KEYS.has(k) ? 'asc' : 'desc' })
   }
 
   function arrow(k: SortKey) {
@@ -493,7 +505,7 @@ export default function InstancesPage() {
           {([
             'comfyui', 'ollama', 'sdwebui', 'openwebui', 'jupyter',
             'vllm', 'tgi', 'ray', 'triton', 'tgwebui', 'lmstudio',
-            'sglang', 'llamacpp', 'litellm', 'tensorboard',
+            'sglang', 'llamacpp', 'litellm', 'tensorboard', 'CLIProxyAPI',
           ] as Service[]).map((svc) => {
             const c = stats?.by_service[svc]
             return (
@@ -683,13 +695,27 @@ export default function InstancesPage() {
           <thead>
             <tr>
               <th>★</th>
-              <th>service</th>
-              <th>host</th>
-              <th>provider</th>
-              <th>country</th>
-              <th>state</th>
-              <th>version</th>
-              <th>gpu</th>
+              <th className="sortable" onClick={() => toggleSort('service')}>
+                service {arrow('service')}
+              </th>
+              <th className="sortable" onClick={() => toggleSort('host')}>
+                host {arrow('host')}
+              </th>
+              <th className="sortable" onClick={() => toggleSort('provider')}>
+                provider {arrow('provider')}
+              </th>
+              <th className="sortable" onClick={() => toggleSort('country')}>
+                country {arrow('country')}
+              </th>
+              <th className="sortable" onClick={() => toggleSort('state')}>
+                state {arrow('state')}
+              </th>
+              <th className="sortable" onClick={() => toggleSort('version')}>
+                version {arrow('version')}
+              </th>
+              <th className="sortable" onClick={() => toggleSort('gpu')}>
+                gpu {arrow('gpu')}
+              </th>
               <th className="sortable" onClick={() => toggleSort('vram_total_gb')}>
                 vram {arrow('vram_total_gb')}
               </th>

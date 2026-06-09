@@ -30,6 +30,7 @@ SUPPORTED_PORTS = (
     30000,  # sglang
     4000,   # litellm
     6006,   # tensorboard
+    8317,   # CLIProxyAPI
 )
 
 

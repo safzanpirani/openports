@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime
 from typing import Any
 
@@ -11,15 +12,18 @@ from .alerts import evaluate_alerts
 from .config import settings
 from .enrich_hosting import classify_provider, enrich_ip_hosting
 from .fingerprints import (
-    verify_comfyui, verify_jupyter, verify_litellm, verify_llamacpp,
-    verify_lmstudio, verify_ollama, verify_openwebui, verify_ray,
-    verify_sdwebui, verify_sglang, verify_tensorboard, verify_tgi,
-    verify_tgwebui, verify_triton, verify_vllm,
+    verify_cliproxyapi, verify_comfyui, verify_jupyter, verify_litellm,
+    verify_llamacpp, verify_lmstudio, verify_ollama, verify_openwebui,
+    verify_ray, verify_sdwebui, verify_sglang, verify_tensorboard,
+    verify_tgi, verify_tgwebui, verify_triton, verify_vllm,
 )
 from .models import Instance, InstanceChange, InstanceCheck, ScanRun, Service
 from .models_summary import diff_names, model_names
 from .shodan_client import candidates_for_ports
 from .telegram import send_telegram_message
+
+
+log = logging.getLogger("openports.scanner")
 
 
 def _service_from_port(port: int) -> Service | None:
@@ -55,6 +59,8 @@ def _service_from_port(port: int) -> Service | None:
         return Service.litellm
     if port == 6006:
         return Service.tensorboard
+    if port == 8317:
+        return Service.CLIProxyAPI
     return None
 
 
@@ -166,14 +172,35 @@ async def _verify_one(
             if port == 6006:
                 ok, meta, models, version, metrics = await verify_tensorboard(base_url, client)
                 return Service.tensorboard, ip, port, ok, meta, models, version, None, shodan_compact, metrics
+            if port == 8317:
+                ok, meta, models, version, metrics = await verify_cliproxyapi(base_url, client)
+                return Service.CLIProxyAPI, ip, port, ok, meta, models, version, None, shodan_compact, metrics
 
     # unreachable
     raise RuntimeError("unsupported port")
 
 
-def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok: bool, meta, models, version, gpu_name, shodan_match, metrics: dict[str, Any], discovery_source: str | None = None) -> tuple[Instance, bool]:
+def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok: bool, meta, models, version, gpu_name, shodan_match, metrics: dict[str, Any], discovery_source: str | None = None) -> tuple[Instance, bool] | None:
+    """Insert or update an instance row from a verify result.
+
+    Returns ``None`` when a new candidate is rejected as junk (the host's root
+    page matched a known non-AI signature). Existing rows are still updated —
+    so historical context is preserved — but newly-discovered junk hosts are
+    refused at the gate to keep the catalog clean.
+    """
     stmt = select(Instance).where(Instance.service == service, Instance.ip == ip, Instance.port == port)
     inst = session.exec(stmt).first()
+
+    if inst is None and service == Service.CLIProxyAPI and not ok:
+        log.info("skipping CLIProxyAPI insert without public /v1/models: %s:%s", ip, port)
+        return None
+
+    if inst is None and not ok and metrics and metrics.get("junk_signature"):
+        log.info(
+            "skipping junk insert: %s %s:%s sig=%s",
+            service.value, ip, port, metrics["junk_signature"],
+        )
+        return None
 
     created = False
     now = datetime.utcnow()
@@ -200,7 +227,7 @@ def _upsert_instance(session: Session, service: Service, ip: str, port: int, ok:
         inst.last_seen_at = now
         inst.last_error = None
     else:
-        inst.last_error = "verify_failed"
+        inst.last_error = str(metrics.get("last_error") or "verify_failed")
 
     inst.shodan = shodan_match
     if meta is not None:
@@ -316,7 +343,7 @@ async def run_multi_source_scan(
     chosen = sources or ["shodan", "censys", "zoomeye", "netlas"]
 
     queried = ", ".join(chosen)
-    run = ScanRun(source=f"multi:{queried}", query="port:8188 OR port:11434", started_at=datetime.utcnow())
+    run = ScanRun(source=f"multi:{queried}", query="supported service ports", started_at=datetime.utcnow())
     session.add(run)
     session.commit()
     session.refresh(run)
@@ -369,6 +396,7 @@ async def run_multi_source_scan(
 
         verified = 0
         new_instances = 0
+        junk_skipped = 0
         for r in results:
             if isinstance(r, Exception):
                 continue
@@ -377,10 +405,14 @@ async def run_multi_source_scan(
                 verified += 1
             sources = sources_per_target.get((ip, port), [])
             primary_source = sources[0] if sources else "shodan"
-            inst, created = _upsert_instance(
+            upsert_result = _upsert_instance(
                 session, service, ip, port, ok, meta, models_v, version, gpu_name,
                 shodan_match=shodan_compact, metrics=metrics, discovery_source=primary_source,
             )
+            if upsert_result is None:
+                junk_skipped += 1
+                continue
+            inst, created = upsert_result
             # Add any additional sources beyond the primary one.
             if len(sources) > 1:
                 existing = list(inst.discovery_sources or [])
@@ -401,6 +433,8 @@ async def run_multi_source_scan(
 
         run.verified = verified
         run.new_instances = new_instances
+        if junk_skipped:
+            log.info("multi-scan junk_skipped=%d", junk_skipped)
         run.finished_at = datetime.utcnow()
         session.add(run)
         session.commit()
@@ -418,7 +452,7 @@ async def run_multi_source_scan(
 async def run_shodan_scan(session: Session, limit: int | None = None) -> ScanRun:
     limit = limit or settings.SHODAN_LIMIT
 
-    run = ScanRun(source="shodan", query="port:8188 OR port:11434", started_at=datetime.utcnow())
+    run = ScanRun(source="shodan", query="supported service ports", started_at=datetime.utcnow())
     session.add(run)
     session.commit()
     session.refresh(run)
@@ -451,16 +485,21 @@ async def run_shodan_scan(session: Session, limit: int | None = None) -> ScanRun
 
         verified = 0
         new_instances = 0
+        junk_skipped = 0
         for r in results:
             if isinstance(r, Exception):
                 continue
             service, ip, port, ok, meta, models, version, gpu_name, shodan_compact, metrics = r
             if ok:
                 verified += 1
-            inst, created = _upsert_instance(
+            upsert_result = _upsert_instance(
                 session, service, ip, port, ok, meta, models, version, gpu_name,
                 shodan_match=shodan_compact, metrics=metrics, discovery_source="shodan",
             )
+            if upsert_result is None:
+                junk_skipped += 1
+                continue
+            inst, created = upsert_result
 
             if created and ok:
                 new_instances += 1
@@ -468,6 +507,8 @@ async def run_shodan_scan(session: Session, limit: int | None = None) -> ScanRun
 
         run.verified = verified
         run.new_instances = new_instances
+        if junk_skipped:
+            log.info("shodan-scan junk_skipped=%d", junk_skipped)
         run.finished_at = datetime.utcnow()
         session.add(run)
         session.commit()

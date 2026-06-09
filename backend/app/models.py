@@ -25,6 +25,7 @@ class Service(str, Enum):
     llamacpp = "llamacpp"
     litellm = "litellm"
     tensorboard = "tensorboard"
+    CLIProxyAPI = "CLIProxyAPI"
 
 
 class Instance(SQLModel, table=True):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -10,28 +11,28 @@ import httpx
 from sqlmodel import Session, select
 
 from .config import settings
-from .fingerprints import verify_comfyui, verify_ollama
-from .models import Instance, ScanRun, Service
+from .fingerprints import verify_for_service
+from .models import Instance, ScanRun
 from .scanner import _upsert_instance
+
+
+log = logging.getLogger("openports.recheck")
 
 
 async def _verify(client: httpx.AsyncClient, sem: asyncio.Semaphore, inst: Instance) -> tuple[Instance, bool, dict[str, Any]]:
     base_url = f"http://{inst.ip}:{inst.port}"
     async with sem:
-        if inst.service == Service.comfyui:
-            ok, meta, models, version, gpu_name, metrics = await verify_comfyui(base_url, client)
-            return inst, ok, {
-                "service": Service.comfyui, "ip": inst.ip, "port": inst.port,
-                "ok": ok, "meta": meta, "models": models, "version": version, "gpu_name": gpu_name,
-                "shodan_match": inst.shodan, "metrics": metrics,
-            }
-        else:
-            ok, meta, models, version, metrics = await verify_ollama(base_url, client)
-            return inst, ok, {
-                "service": Service.ollama, "ip": inst.ip, "port": inst.port,
-                "ok": ok, "meta": meta, "models": models, "version": version, "gpu_name": None,
-                "shodan_match": inst.shodan, "metrics": metrics,
-            }
+        try:
+            ok, meta, models, version, gpu_name, metrics = await verify_for_service(inst.service, base_url, client)
+        except Exception:
+            service = inst.service.value if hasattr(inst.service, "value") else str(inst.service)
+            log.exception("recheck verify failed for %s %s:%s", service, inst.ip, inst.port)
+            raise
+        return inst, ok, {
+            "service": inst.service, "ip": inst.ip, "port": inst.port,
+            "ok": ok, "meta": meta, "models": models, "version": version, "gpu_name": gpu_name,
+            "shodan_match": inst.shodan, "metrics": metrics,
+        }
 
 
 async def run_recheck(

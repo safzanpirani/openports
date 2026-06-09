@@ -132,7 +132,7 @@ def _search(query: str, port: int, size: int = 20) -> list[dict[str, Any]]:
 # Same port set as the other source clients — _service_from_port maps these.
 SUPPORTED_PORTS = (
     8188, 11434, 7860, 3000, 8888,
-    8000, 8080, 8265, 5000, 1234, 30000, 4000, 6006,
+    8000, 8080, 8265, 5000, 1234, 30000, 4000, 6006, 8317,
 )
 
 

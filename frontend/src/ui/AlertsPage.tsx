@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Alert, createAlert, deleteAlert, fetchAlerts, patchAlert } from './api'
+import { createAlert, deleteAlert, fetchAlerts, patchAlert } from './api'
+import type { Alert, Service } from './api'
 import { adminToken, fmtRelative } from './format'
 
 const KINDS: { value: Alert['kind']; label: string; hint: string }[] = [
@@ -8,11 +9,32 @@ const KINDS: { value: Alert['kind']; label: string; hint: string }[] = [
   { value: 'alive_changed', label: 'alive flipped', hint: 'fires on alive→down or down→alive transitions' },
 ]
 
+const SERVICES_BY_NAME = {
+  comfyui: true,
+  ollama: true,
+  sdwebui: true,
+  openwebui: true,
+  jupyter: true,
+  vllm: true,
+  tgi: true,
+  ray: true,
+  triton: true,
+  tgwebui: true,
+  lmstudio: true,
+  sglang: true,
+  llamacpp: true,
+  litellm: true,
+  tensorboard: true,
+  CLIProxyAPI: true,
+} satisfies Record<Service, true>
+
+const SERVICES = Object.keys(SERVICES_BY_NAME) as Service[]
+
 type FormState = {
   id: number | null
   name: string
   kind: Alert['kind']
-  service: '' | 'comfyui' | 'ollama'
+  service: '' | Service
   gpu: string
   min_vram: string
   min_max_params: string
@@ -176,8 +198,9 @@ export default function AlertsPage() {
           </select>
           <select value={form.service} onChange={(e) => setForm({ ...form, service: e.target.value as FormState['service'] })}>
             <option value="">any service</option>
-            <option value="comfyui">comfyui</option>
-            <option value="ollama">ollama</option>
+            {SERVICES.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
           </select>
         </div>
         <div className="row wrap" style={{ gap: 8, marginTop: 8 }}>

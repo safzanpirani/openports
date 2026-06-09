@@ -82,7 +82,7 @@ export default function ModelsPage() {
           {([
             'comfyui', 'ollama', 'sdwebui', 'openwebui', 'jupyter',
             'vllm', 'tgi', 'ray', 'triton', 'tgwebui', 'lmstudio',
-            'sglang', 'llamacpp', 'litellm', 'tensorboard',
+            'sglang', 'llamacpp', 'litellm', 'tensorboard', 'CLIProxyAPI',
           ] as Service[]).map((s) => (
             <option key={s} value={s}>{s}</option>
           ))}

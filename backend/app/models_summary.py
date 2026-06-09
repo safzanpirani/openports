@@ -68,8 +68,9 @@ def model_names(service: Service | str, models: dict[str, Any] | None) -> list[s
         return sorted(set(out))
 
     # Services that expose OpenAI-style /v1/models or similar shape:
-    # vllm, tgi (single model), tgwebui, lmstudio, sglang, llamacpp, litellm.
-    if svc in {"vllm", "tgi", "tgwebui", "lmstudio", "sglang", "llamacpp", "litellm"}:
+    # vllm, tgi (single model), tgwebui, lmstudio, sglang, llamacpp,
+    # litellm, CLIProxyAPI.
+    if svc in {"vllm", "tgi", "tgwebui", "lmstudio", "sglang", "llamacpp", "litellm", "CLIProxyAPI"}:
         out = []
         data = models.get("data")
         if isinstance(data, list):
